@@ -1,6 +1,6 @@
 # Thermo_Obs: ESP32-C3 Smart BLE Thermometer Observer & Cloud Logger
 
-**Thermo_Obs** is an open-source, resilient IoT monitoring system designed for continuous temperature/humidity observation, cloud logging, power outage alerting, and visual OLED analytics. It runs on the ultra-compact **ESP32-C3 Mini** microcontroller coupled with a **0.42" I2C OLED display**, tracking BLE advertisements from Xiaomi Mijia thermometers flashed with custom ATC / BTHome firmware.
+**Thermo_Obs** is an open-source, resilient IoT monitoring system designed for continuous temperature/humidity observation, cloud logging, power outage alerting, and visual OLED analytics. It runs on the ultra-compact **ESP32-C3 0.42" OLED development board** (with built-in display), tracking BLE advertisements from Xiaomi Mijia thermometers flashed with custom ATC / BTHome firmware.
 
 ---
 
@@ -16,7 +16,7 @@
   - Dedicated 185s BLE acquisition window and non-blocking Wi-Fi upload stage.
   - Never submits stale or frozen measurements.
 - **Physical BOOT Button UI Navigation:**
-  - **Short Press:** Browse through 8 informative real-time OLED screens.
+  - **Short Press:** Browse through 8 informative real-time OLED screens without background interference.
   - **5-Second Long Press (with on-screen progress bar):** Opens the Configuration Menu (`WPS`, `Web Portal`, `BLE Discover`).
   - 10-second inactivity timeout returning to the primary screen.
 - **36-Hour Temperature Analytics:**
@@ -33,10 +33,9 @@
 
 ## 🛠️ Hardware Requirements
 
-1. **Microcontroller:** ESP32-C3 SuperMini / ESP32-C3 0.42" OLED Board.
-2. **Display:** 0.42" 72x40 SSD1306 / SSD1315 I2C OLED (SDA: `GPIO 5`, SCL: `GPIO 6`).
-3. **Thermometer:** Xiaomi Mijia Bluetooth Thermometer 2 (**LYWSD03MMC**) or compatible ATC/BTHome BLE beacon.
-4. **Power Detection (Optional):** Optocoupler or voltage divider connected to `GPIO 4`.
+1. **Development Board:** ESP32-C3 0.42" OLED Board (all-in-one board with on-board 0.42" SSD1306 I2C OLED display).
+2. **Thermometer:** Xiaomi Mijia Bluetooth Thermometer 2 (**LYWSD03MMC**) or compatible ATC/BTHome BLE beacon.
+3. **Power Detection (Optional):** Optocoupler or voltage divider connected to `GPIO 4`.
 
 ---
 
