@@ -1,0 +1,290 @@
+#pragma once
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEScan.h>
+#include "config_manager.h"
+
+extern ConfigManager cfgMgr;
+
+struct DiscoveredBLEDevice {
+  String mac;
+  String name;
+  int rssi;
+  float temp;
+  float hum;
+  int battery;
+};
+
+extern std::vector<DiscoveredBLEDevice> discoveredBLEs;
+extern BLEScan* pBLEScan;
+
+class WebPortal {
+private:
+  WebServer server;
+  DNSServer dnsServer;
+  bool isRunning = false;
+
+  String buildHtml() {
+    String html = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">";
+    html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">";
+    html += "<title>Thermo_Obs Configuration Portal</title>";
+    html += "<style>";
+    html += "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f0f2f5;margin:0;padding:15px;color:#333;}";
+    html += ".card{background:#fff;border-radius:12px;padding:20px;margin-bottom:15px;box-shadow:0 2px 8px rgba(0,0,0,0.08);}";
+    html += "h2{margin-top:0;color:#1a73e8;font-size:18px;border-bottom:2px solid #e8f0fe;padding-bottom:8px;}";
+    html += "label{display:block;font-size:13px;font-weight:600;margin:10px 0 4px;color:#555;}";
+    html += "input,select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:14px;}";
+    html += ".row{display:flex;gap:10px;}.col{flex:1;}";
+    html += ".btn{background:#1a73e8;color:#fff;border:none;padding:14px;border-radius:8px;font-size:16px;font-weight:600;width:100%;cursor:pointer;margin-top:15px;}";
+    html += ".btn-scan{background:#34a853;display:inline-block;text-align:center;text-decoration:none;padding:10px 14px;border-radius:6px;color:#fff;font-weight:600;margin-top:10px;font-size:14px;}";
+    html += ".btn-danger{background:#d93025;display:inline-block;text-align:center;text-decoration:none;padding:12px;border-radius:8px;color:#fff;font-weight:600;width:100%;box-sizing:border-box;margin-top:10px;}";
+    html += ".device-item{border:1px solid #e0e0e0;border-radius:6px;padding:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;}";
+    html += ".badge{background:#e8f0fe;color:#1a73e8;padding:3px 6px;border-radius:4px;font-size:11px;font-weight:600;}";
+    html += "#status-box{display:none;position:fixed;top:20px;left:20px;right:20px;background:#34a853;color:#fff;padding:15px;border-radius:8px;text-align:center;font-weight:bold;z-index:999;}";
+    html += "#scan-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);color:#fff;z-index:1000;display:none;flex-direction:column;align-items:center;justify-content:center;}";
+    html += ".spinner{border:5px solid #f3f3f3;border-top:5px solid #34a853;border-radius:50%;width:45px;height:45px;animation:spin 1s linear infinite;margin-bottom:15px;}";
+    html += "@keyframes spin{0%{transform:rotate(0deg);}100%{transform:rotate(360deg);}}";
+    html += "</style>";
+    html += "<script>";
+    html += "function submitForm(e){";
+    html += "  e.preventDefault();";
+    html += "  var form = document.getElementById('cfg-form');";
+    html += "  var formData = new FormData(form);";
+    html += "  var btn = document.getElementById('save-btn');";
+    html += "  btn.disabled = true; btn.innerText = 'Saving...';";
+    html += "  fetch('/save', {method: 'POST', body: formData})";
+    html += "  .then(response => {";
+    html += "    document.getElementById('status-box').style.display = 'block';";
+    html += "    setTimeout(()=>{ window.location.reload(); }, 3000);";
+    html += "  })";
+    html += "  .catch(error => { alert('Error occurred!'); btn.disabled = false; btn.innerText = 'SAVE'; });";
+    html += "}";
+    html += "function triggerScan(){";
+    html += "  var m = document.getElementById('scan-modal');";
+    html += "  m.style.display = 'flex';";
+    html += "  fetch('/trigger_scan').then(r => r.text()).then(d => { window.location.href = '/'; });";
+    html += "}";
+    html += "</script>";
+    html += "</head><body>";
+
+    html += "<div id=\"status-box\">✅ Settings Saved Successfully! Device is restarting...</div>";
+
+    html += "<div id=\"scan-modal\">";
+    html += "<div class=\"spinner\"></div>";
+    html += "<div style=\"font-size:18px;font-weight:bold;\">🔍 Scanning Thermometers...</div>";
+    html += "<div style=\"font-size:13px;margin-top:8px;color:#ddd;\">Please wait (5 seconds)...</div>";
+    html += "</div>";
+
+    html += "<form id=\"cfg-form\" onsubmit=\"submitForm(event)\">";
+    html += "<div class=\"card\">";
+    html += "<h2>📶 1. Wi-Fi Configuration (Primary & Backup)</h2>";
+    html += "<label>Primary Wi-Fi SSID:</label>";
+    html += "<input type=\"text\" name=\"ssid\" value=\"" + cfgMgr.config.wifiSsid + "\" required>";
+    html += "<label>Primary Wi-Fi Password:</label>";
+    html += "<input type=\"password\" name=\"pass\" value=\"" + cfgMgr.config.wifiPass + "\">";
+
+    html += "<label style=\"margin-top:15px;color:#e67e22;\">Backup Wi-Fi SSID [Optional]:</label>";
+    html += "<input type=\"text\" name=\"b_ssid\" value=\"" + cfgMgr.config.backupWifiSsid + "\">";
+    html += "<label style=\"color:#e67e22;\">Backup Wi-Fi Password:</label>";
+    html += "<input type=\"password\" name=\"b_pass\" value=\"" + cfgMgr.config.backupWifiPass + "\">";
+    html += "</div>";
+
+    html += "<div class=\"card\">";
+    html += "<h2>🔵 2. BLE Thermometer Pairing</h2>";
+    if (cfgMgr.config.bleTargetMac.length() > 0) {
+      html += "<div style=\"margin-bottom:10px;\"><strong>Paired Device:</strong> " + cfgMgr.config.bleTargetName + " (" + cfgMgr.config.bleTargetMac + ")</div>";
+      html += "<a href=\"/clear_ble\" style=\"color:#d93025;font-weight:600;text-decoration:none;\">🗑️ Unpair Device / Auto-Discover</a><br>";
+    } else {
+      html += "<div style=\"color:#f2994a;font-weight:600;margin-bottom:10px;\">⚠️ No paired device. Closest thermometer will be auto-selected.</div>";
+    }
+
+    html += "<a href=\"javascript:void(0);\" onclick=\"triggerScan()\" class=\"btn-scan\">🔄 Scan Nearby Thermometers (5s)</a>";
+
+    html += "<label style=\"margin-top:15px;\">Discovered Thermometers (" + String(discoveredBLEs.size()) + " found):</label>";
+    for (size_t i = 0; i < discoveredBLEs.size(); i++) {
+      String checked = (discoveredBLEs[i].mac.equalsIgnoreCase(cfgMgr.config.bleTargetMac)) ? "checked" : "";
+      html += "<div class=\"device-item\">";
+      html += "<div><input type=\"radio\" name=\"sel_ble\" value=\"" + discoveredBLEs[i].mac + "|" + discoveredBLEs[i].name + "\" " + checked + " id=\"ble_" + String(i) + "\"> ";
+      html += "<label style=\"display:inline;\" for=\"ble_" + String(i) + "\"><strong>" + discoveredBLEs[i].name + "</strong> (" + discoveredBLEs[i].mac + ")</label></div>";
+      html += "<div><span class=\"badge\">" + String(discoveredBLEs[i].rssi) + " dBm</span> <span class=\"badge\">" + String(discoveredBLEs[i].temp, 1) + " &deg;C</span></div>";
+      html += "</div>";
+    }
+    html += "</div>";
+
+    html += "<div class=\"card\">";
+    html += "<h2>🌡️ 3. Temperature & Logging Settings</h2>";
+    html += "<div class=\"row\"><div class=\"col\">";
+    html += "<label>Min Limit (&deg;C):</label>";
+    html += "<input type=\"number\" step=\"0.1\" name=\"t_min\" value=\"" + String(cfgMgr.config.normalTempMin, 1) + "\">";
+    html += "</div><div class=\"col\">";
+    html += "<label>Max Limit (&deg;C):</label>";
+    html += "<input type=\"number\" step=\"0.1\" name=\"t_max\" value=\"" + String(cfgMgr.config.normalTempMax, 1) + "\">";
+    html += "</div></div>";
+
+    html += "<div class=\"row\"><div class=\"col\">";
+    html += "<label>Logging Interval (min):</label>";
+    html += "<input type=\"number\" name=\"log_int\" value=\"" + String(cfgMgr.config.logIntervalMin) + "\">";
+    html += "</div><div class=\"col\">";
+    html += "<label>Limit Alert Interval (min):</label>";
+    html += "<input type=\"number\" name=\"lim_int\" value=\"" + String(cfgMgr.config.limitAlertIntervalMin) + "\">";
+    html += "</div></div>";
+    html += "</div>";
+
+    html += "<div class=\"card\">";
+    html += "<h2>⚡ 4. Power Outage Detection</h2>";
+    html += "<label>Power Detection GPIO Pin:</label>";
+    html += "<input type=\"number\" name=\"pwr_pin\" value=\"" + String(cfgMgr.config.powerDetectPin) + "\">";
+
+    html += "<div class=\"row\"><div class=\"col\">";
+    html += "<label>Power Loss Min Limit (&deg;C):</label>";
+    html += "<input type=\"number\" step=\"0.1\" name=\"pwr_t_min\" value=\"" + String(cfgMgr.config.powerLossTempMin, 1) + "\">";
+    html += "</div><div class=\"col\">";
+    html += "<label>Power Loss Max Limit (&deg;C):</label>";
+    html += "<input type=\"number\" step=\"0.1\" name=\"pwr_t_max\" value=\"" + String(cfgMgr.config.powerLossTempMax, 1) + "\">";
+    html += "</div></div>";
+
+    html += "<label>Outage Alert Interval (min):</label>";
+    html += "<input type=\"number\" name=\"pwr_int\" value=\"" + String(cfgMgr.config.powerLossAlertIntervalMin) + "\">";
+
+    html += "<label>Notification Channels on Outage:</label>";
+    html += "<input type=\"checkbox\" name=\"pwr_tg\" value=\"1\" " + String(cfgMgr.config.notifyTelegramOnPowerLoss ? "checked" : "") + " id=\"cb_tg\"> <label style=\"display:inline;\" for=\"cb_tg\">Telegram</label><br>";
+    html += "<input type=\"checkbox\" name=\"pwr_wh\" value=\"1\" " + String(cfgMgr.config.notifyWebhookOnPowerLoss ? "checked" : "") + " id=\"cb_wh\"> <label style=\"display:inline;\" for=\"cb_wh\">Webhook</label><br>";
+    html += "<input type=\"checkbox\" name=\"pwr_gs\" value=\"1\" " + String(cfgMgr.config.notifySheetsOnPowerLoss ? "checked" : "") + " id=\"cb_gs\"> <label style=\"display:inline;\" for=\"cb_gs\">Google Sheets</label>";
+    html += "</div>";
+
+    html += "<div class=\"card\">";
+    html += "<h2>🔔 5. Notification Channels & Endpoints</h2>";
+    html += "<label>Google Sheets Web App URL:</label>";
+    html += "<input type=\"text\" name=\"gs_url\" value=\"" + cfgMgr.config.googleScriptUrl + "\">";
+    html += "<label>Custom Webhook URL:</label>";
+    html += "<input type=\"text\" name=\"wh_url\" value=\"" + cfgMgr.config.webhookUrl + "\">";
+    html += "<label>Telegram Bot Token:</label>";
+    html += "<input type=\"text\" name=\"tg_token\" value=\"" + cfgMgr.config.telegramBotToken + "\">";
+    html += "<label>Telegram Chat ID:</label>";
+    html += "<input type=\"text\" name=\"tg_chat\" value=\"" + cfgMgr.config.telegramChatId + "\">";
+    html += "</div>";
+
+    html += "<button type=\"submit\" id=\"save-btn\" class=\"btn\">💾 SAVE ALL & RESTART</button>";
+    html += "</form>";
+
+    html += "<div class=\"card\" style=\"border:1px solid #fce8e6;margin-top:20px;\">";
+    html += "<h2 style=\"color:#d93025;border-color:#fce8e6;\">⚠️ Factory Reset (Format NVS)</h2>";
+    html += "<p style=\"font-size:13px;color:#666;\">Clears all stored Wi-Fi credentials, paired thermometers, and notification configurations.</p>";
+    html += "<a href=\"/factory_reset\" onclick=\"return confirm('All settings will be erased and reset to defaults. Continue?');\" class=\"btn-danger\">🚨 FACTORY RESET (CLEAR NVS)</a>";
+    html += "</div>";
+
+    html += "</body></html>";
+    return html;
+  }
+
+public:
+  WebPortal() : server(80) {}
+
+  void start() {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_AP);
+
+    IPAddress local_ip(192, 168, 4, 1);
+    IPAddress gateway(192, 168, 4, 1);
+    IPAddress subnet(255, 255, 255, 0);
+    WiFi.softAPConfig(local_ip, gateway, subnet);
+
+    WiFi.softAP("Thermo_Obs", cfgMgr.config.apPassword.c_str());
+    dnsServer.start(53, "*", local_ip);
+
+    server.on("/", HTTP_GET, [this]() {
+      server.sendHeader("Connection", "close");
+      server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      server.send(200, "text/html; charset=utf-8", buildHtml());
+    });
+
+    server.on("/clear_ble", HTTP_GET, [this]() {
+      cfgMgr.clearBLE();
+      server.sendHeader("Location", "/");
+      server.send(302, "text/plain", "");
+    });
+
+    server.on("/trigger_scan", HTTP_GET, [this]() {
+      Serial.println("[PORTAL] On-demand BLE scan started (5s)...");
+      discoveredBLEs.clear();
+      if (pBLEScan) {
+        pBLEScan->start(5, false);
+        pBLEScan->clearResults();
+      }
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/plain", "OK");
+    });
+
+    server.on("/factory_reset", HTTP_GET, [this]() {
+      cfgMgr.factoryReset();
+      String resp = "<html><body style=\"font-family:sans-serif;text-align:center;padding:50px;\">";
+      resp += "<h2 style=\"color:#d93025;\">🚨 All NVS Settings Erased!</h2><p>Device restarting...</p></body></html>";
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/html; charset=utf-8", resp);
+      delay(1500);
+      ESP.restart();
+    });
+
+    server.on("/save", HTTP_POST, [this]() {
+      if (server.hasArg("ssid")) cfgMgr.config.wifiSsid = server.arg("ssid");
+      if (server.hasArg("pass")) cfgMgr.config.wifiPass = server.arg("pass");
+      if (server.hasArg("b_ssid")) cfgMgr.config.backupWifiSsid = server.arg("b_ssid");
+      if (server.hasArg("b_pass")) cfgMgr.config.backupWifiPass = server.arg("b_pass");
+
+      if (server.hasArg("sel_ble")) {
+        String sel = server.arg("sel_ble");
+        int sep = sel.indexOf('|');
+        if (sep != -1) {
+          cfgMgr.config.bleTargetMac = sel.substring(0, sep);
+          cfgMgr.config.bleTargetName = sel.substring(sep + 1);
+        }
+      }
+
+      if (server.hasArg("t_min")) cfgMgr.config.normalTempMin = server.arg("t_min").toFloat();
+      if (server.hasArg("t_max")) cfgMgr.config.normalTempMax = server.arg("t_max").toFloat();
+      if (server.hasArg("log_int")) cfgMgr.config.logIntervalMin = server.arg("log_int").toInt();
+      if (server.hasArg("lim_int")) cfgMgr.config.limitAlertIntervalMin = server.arg("lim_int").toInt();
+
+      if (server.hasArg("pwr_pin")) cfgMgr.config.powerDetectPin = server.arg("pwr_pin").toInt();
+      if (server.hasArg("pwr_t_min")) cfgMgr.config.powerLossTempMin = server.arg("pwr_t_min").toFloat();
+      if (server.hasArg("pwr_t_max")) cfgMgr.config.powerLossTempMax = server.arg("pwr_t_max").toFloat();
+      if (server.hasArg("pwr_int")) cfgMgr.config.powerLossAlertIntervalMin = server.arg("pwr_int").toInt();
+
+      cfgMgr.config.notifyTelegramOnPowerLoss = server.hasArg("pwr_tg");
+      cfgMgr.config.notifyWebhookOnPowerLoss = server.hasArg("pwr_wh");
+      cfgMgr.config.notifySheetsOnPowerLoss = server.hasArg("pwr_gs");
+
+      if (server.hasArg("gs_url")) cfgMgr.config.googleScriptUrl = server.arg("gs_url");
+      if (server.hasArg("wh_url")) cfgMgr.config.webhookUrl = server.arg("wh_url");
+      if (server.hasArg("tg_token")) cfgMgr.config.telegramBotToken = server.arg("tg_token");
+      if (server.hasArg("tg_chat")) cfgMgr.config.telegramChatId = server.arg("tg_chat");
+
+      cfgMgr.save();
+
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/plain; charset=utf-8", "OK");
+      delay(1500);
+      ESP.restart();
+    });
+
+    server.onNotFound([this]() {
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+
+    server.begin();
+    isRunning = true;
+    Serial.printf("[PORTAL] AP Started: Thermo_Obs | Password: %s | IP: 192.168.4.1\n", cfgMgr.config.apPassword.c_str());
+  }
+
+  void handle() {
+    if (isRunning) {
+      dnsServer.processNextRequest();
+      server.handleClient();
+    }
+  }
+};
