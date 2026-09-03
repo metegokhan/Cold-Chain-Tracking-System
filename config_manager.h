@@ -16,6 +16,10 @@ struct AppConfig {
   String bleTargetMac;
   String bleTargetName;
 
+  // Timing & Intervals (in seconds)
+  int bleReadIntervalSec;    // BLE reading/send interval in seconds (default: 60)
+  int stageTimeoutSec;       // Timeout for discovery/waiting in seconds (default: 185)
+
   // Logging & Limits
   int logIntervalMin;        // e.g. 1 min
   float normalTempMin;       // e.g. 2.0 °C
@@ -76,6 +80,12 @@ public:
     config.bleTargetMac = prefs.getString("ble_mac", "");
     config.bleTargetName = prefs.getString("ble_name", "");
 
+    config.bleReadIntervalSec = prefs.getInt("ble_int", 60);
+    if (config.bleReadIntervalSec < 5) config.bleReadIntervalSec = 5;
+
+    config.stageTimeoutSec = prefs.getInt("stg_tout", 185);
+    if (config.stageTimeoutSec < 10) config.stageTimeoutSec = 10;
+
     config.logIntervalMin = prefs.getInt("log_int", 1);
     config.normalTempMin = prefs.getFloat("t_min", 2.0);
     config.normalTempMax = prefs.getFloat("t_max", 8.0);
@@ -109,6 +119,9 @@ public:
 
     prefs.putString("ble_mac", config.bleTargetMac);
     prefs.putString("ble_name", config.bleTargetName);
+
+    prefs.putInt("ble_int", config.bleReadIntervalSec);
+    prefs.putInt("stg_tout", config.stageTimeoutSec);
 
     prefs.putInt("log_int", config.logIntervalMin);
     prefs.putFloat("t_min", config.normalTempMin);

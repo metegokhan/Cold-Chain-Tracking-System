@@ -11,9 +11,11 @@
   - Standalone SoftAP (`Thermo_Obs`) with persistent randomly-generated 8-digit password.
   - On-demand BLE scanning (5 seconds) with interactive device selection.
   - Primary and backup Wi-Fi configuration with automatic failover.
+  - **Customizable BLE Reading Interval:** Define how often data is read and reported (e.g. every 60s) with non-blocking `millis()` timing.
+  - **Customizable BLE Search Timeout:** Configurable timeout period (default: 185s) before auto-discovery or fallback.
   - NVS persistent storage & One-click Factory Reset.
 - **Dual-Mode Coexistence & Timeout State Machine:**
-  - Dedicated 185s BLE acquisition window and non-blocking Wi-Fi upload stage.
+  - Dedicated configurable BLE acquisition window and non-blocking Wi-Fi upload stage.
   - Never submits stale or frozen measurements.
 - **Physical BOOT Button UI Navigation:**
   - **Short Press:** Browse through 8 informative real-time OLED screens without background interference.
@@ -122,7 +124,7 @@ Use **Arduino CLI** or **Arduino IDE (ESP32 Board Package $\ge 3.0.0$ / Arduino 
 arduino-cli compile --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=huge_app .
 
 # Upload to ESP32-C3 port
-arduino-cli upload -p COM15 --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=huge_app .
+arduino-cli upload -p COM_PORT --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=huge_app .
 ```
 
 ---

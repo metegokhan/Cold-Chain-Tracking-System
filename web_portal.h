@@ -116,7 +116,20 @@ private:
     html += "</div>";
 
     html += "<div class=\"card\">";
-    html += "<h2>🌡️ 3. Temperature & Logging Settings</h2>";
+    html += "<h2>⏱️ 3. Timing & Scan Intervals</h2>";
+    html += "<div class=\"row\"><div class=\"col\">";
+    html += "<label>BLE Read Interval (seconds):</label>";
+    html += "<input type=\"number\" min=\"5\" name=\"ble_int\" value=\"" + String(cfgMgr.config.bleReadIntervalSec) + "\">";
+    html += "<small style=\"color:#666;\">Interval between thermometer reads/logging (e.g. 60s)</small>";
+    html += "</div><div class=\"col\">";
+    html += "<label>BLE Search Timeout (seconds):</label>";
+    html += "<input type=\"number\" min=\"10\" name=\"stg_tout\" value=\"" + String(cfgMgr.config.stageTimeoutSec) + "\">";
+    html += "<small style=\"color:#666;\">Search timeout before auto-discovery/fallback (default: 185s)</small>";
+    html += "</div></div>";
+    html += "</div>";
+
+    html += "<div class=\"card\">";
+    html += "<h2>🌡️ 4. Temperature & Limits Settings</h2>";
     html += "<div class=\"row\"><div class=\"col\">";
     html += "<label>Min Limit (&deg;C):</label>";
     html += "<input type=\"number\" step=\"0.1\" name=\"t_min\" value=\"" + String(cfgMgr.config.normalTempMin, 1) + "\">";
@@ -126,16 +139,13 @@ private:
     html += "</div></div>";
 
     html += "<div class=\"row\"><div class=\"col\">";
-    html += "<label>Logging Interval (min):</label>";
-    html += "<input type=\"number\" name=\"log_int\" value=\"" + String(cfgMgr.config.logIntervalMin) + "\">";
-    html += "</div><div class=\"col\">";
     html += "<label>Limit Alert Interval (min):</label>";
     html += "<input type=\"number\" name=\"lim_int\" value=\"" + String(cfgMgr.config.limitAlertIntervalMin) + "\">";
     html += "</div></div>";
     html += "</div>";
 
     html += "<div class=\"card\">";
-    html += "<h2>⚡ 4. Power Outage Detection</h2>";
+    html += "<h2>⚡ 5. Power Outage Detection</h2>";
     html += "<label>Power Detection GPIO Pin:</label>";
     html += "<input type=\"number\" name=\"pwr_pin\" value=\"" + String(cfgMgr.config.powerDetectPin) + "\">";
 
@@ -157,7 +167,7 @@ private:
     html += "</div>";
 
     html += "<div class=\"card\">";
-    html += "<h2>🔔 5. Notification Channels & Endpoints</h2>";
+    html += "<h2>🔔 6. Notification Channels & Endpoints</h2>";
     html += "<label>Google Sheets Web App URL:</label>";
     html += "<input type=\"text\" name=\"gs_url\" value=\"" + cfgMgr.config.googleScriptUrl + "\">";
     html += "<label>Custom Webhook URL:</label>";
@@ -244,9 +254,11 @@ public:
         }
       }
 
+      if (server.hasArg("ble_int")) cfgMgr.config.bleReadIntervalSec = server.arg("ble_int").toInt();
+      if (server.hasArg("stg_tout")) cfgMgr.config.stageTimeoutSec = server.arg("stg_tout").toInt();
+
       if (server.hasArg("t_min")) cfgMgr.config.normalTempMin = server.arg("t_min").toFloat();
       if (server.hasArg("t_max")) cfgMgr.config.normalTempMax = server.arg("t_max").toFloat();
-      if (server.hasArg("log_int")) cfgMgr.config.logIntervalMin = server.arg("log_int").toInt();
       if (server.hasArg("lim_int")) cfgMgr.config.limitAlertIntervalMin = server.arg("lim_int").toInt();
 
       if (server.hasArg("pwr_pin")) cfgMgr.config.powerDetectPin = server.arg("pwr_pin").toInt();

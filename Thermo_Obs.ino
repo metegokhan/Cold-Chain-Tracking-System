@@ -25,9 +25,6 @@ const int Y_OFFSET = 24;
 const int SCREEN_W = 72;
 const int SCREEN_H = 40;
 
-// Timeout Constants (185 Seconds = 185000 ms)
-const unsigned long STAGE_TIMEOUT_MS = 185000UL;
-
 // Hardware Pin Definition (Boot Button)
 const int BOOT_BTN_PIN = 9;
 
@@ -80,11 +77,13 @@ bool isBrowsingScreens = false; // Kullanıcı ekranlarda gezinirken true olur
 // State Machine
 enum NormalAppState {
   STATE_SCAN_BLE,
-  STATE_SEND_WIFI
+  STATE_SEND_WIFI,
+  STATE_WAIT_INTERVAL
 };
 NormalAppState appState = STATE_SCAN_BLE;
 
 unsigned long stateStageStartTime = 0;
+unsigned long waitIntervalStartTime = 0;
 
 // Sensor & Telemetry Data
 volatile bool hasFreshData = false;
@@ -584,11 +583,11 @@ void drawNormalScreens() {
   if (isBrowsingScreens && (millis() - lastScreenSwitchTime >= 10000)) {
     isBrowsingScreens = false;
     currentInfoScr = SCR_MAIN_TEMP;
-    stateStageStartTime = millis(); // Taramayi kaldigi yerden devam ettir
   }
 
   // 3. Error Pop-up (Sadece kullanici gezinmiyorken ve Ana Ekrandayken gosterilir!)
-  if (millis() - lastBlePacketReceivedTime >= STAGE_TIMEOUT_MS) {
+  unsigned long timeoutMs = (unsigned long)cfgMgr.config.stageTimeoutSec * 1000UL;
+  if (millis() - lastBlePacketReceivedTime >= timeoutMs) {
     bleConnectedStatus = false;
   }
 
@@ -914,6 +913,8 @@ void loop() {
   }
 
   unsigned long now = millis();
+  unsigned long timeoutMs = (unsigned long)cfgMgr.config.stageTimeoutSec * 1000UL;
+  unsigned long bleIntervalMs = (unsigned long)cfgMgr.config.bleReadIntervalSec * 1000UL;
 
   if (appState == STATE_SCAN_BLE) {
     pBLEScan->start(1, false);
@@ -955,16 +956,16 @@ void loop() {
       appState = STATE_SEND_WIFI;
       stateStageStartTime = now;
     }
-    else if (now - stateStageStartTime >= STAGE_TIMEOUT_MS) {
+    else if (now - stateStageStartTime >= timeoutMs) {
       if (cfgMgr.config.bleTargetMac.length() > 0 && sysMode == MODE_NORMAL_RUN) {
-        Serial.println("\n[WARN] 185s BLE Timeout -> Triggering Auto-Discovery...");
+        Serial.printf("\n[WARN] %d s BLE Timeout -> Triggering Auto-Discovery...\n", cfgMgr.config.stageTimeoutSec);
         cfgMgr.clearBLE();
         discoveryBestRssi = -999;
         foundCandidate = false;
         bleConnectedStatus = false;
         stateStageStartTime = now;
       } else {
-        Serial.println("\n[WARN] No thermometer found in 185s -> Forwarding empty payload via Wi-Fi");
+        Serial.printf("\n[WARN] No thermometer found in %d s -> Forwarding empty payload via Wi-Fi\n", cfgMgr.config.stageTimeoutSec);
         hasFreshData = false;
         bleConnectedStatus = false;
         appState = STATE_SEND_WIFI;
@@ -976,8 +977,16 @@ void loop() {
     executeSendCycle();
 
     hasFreshData = false;
-    appState = STATE_SCAN_BLE;
-    stateStageStartTime = millis();
-    startBLEScanForMode();
+    waitIntervalStartTime = millis();
+    appState = STATE_WAIT_INTERVAL;
+  }
+  else if (appState == STATE_WAIT_INTERVAL) {
+    // Non-blocking, kesintisiz bekleme (millis tabanlı)
+    // Buton basışları ve ekran çizimleri loop başında kesintisiz devam eder.
+    if (now - waitIntervalStartTime >= bleIntervalMs) {
+      appState = STATE_SCAN_BLE;
+      stateStageStartTime = millis();
+      startBLEScanForMode();
+    }
   }
 }
