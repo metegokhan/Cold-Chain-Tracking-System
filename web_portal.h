@@ -80,6 +80,8 @@ private:
     html += "<div class=\"spinner\"></div>";
     html += "<div style=\"font-size:18px;font-weight:bold;\">🔍 Scanning Thermometers...</div>";
     html += "<div style=\"font-size:13px;margin-top:8px;color:#ddd;\">Please wait (5 seconds)...</div>";
+    html += "</div>";
+
     html += "<div class=\"card\" style=\"background:#eef7ff;border:1.5px solid #1a73e8;\">";
     html += "<h2 style=\"color:#1a73e8;border-color:#d2e3fc;\">📊 Cold Chain Analytics & Report Export</h2>";
     html += "<p style=\"font-size:13px;color:#444;margin-bottom:12px;\">Export official 30-day temperature logs, violation history, and print-ready PDF audit reports.</p>";
@@ -303,6 +305,10 @@ public:
     server.on("/ncsi.txt", HTTP_ANY, [this]() {
       server.sendHeader("Location", "http://192.168.4.1/");
       server.send(302, "text/plain", "");
+    });
+
+    server.on("/favicon.ico", HTTP_GET, [this]() {
+      server.send(204);
     });
 
     server.on("/", HTTP_ANY, [this]() {
