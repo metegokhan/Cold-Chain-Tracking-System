@@ -10,6 +10,7 @@
 #include <BLEScan.h>
 #include <LittleFS.h>
 #include <time.h>
+#include <qrcode.h>
 #include "history_manager.h"
 #include "config_manager.h"
 #include "web_portal.h"
@@ -117,21 +118,39 @@ unsigned long lastHistorySampleTime = 0;
 unsigned long lastHistorySaveTime = 0;
 const char* HISTORY_FILE_PATH = "/history.bin";
 
-// NTP Time Synchronization status
+// NTP Time Synchronization Engine
 bool isTimeSynced = false;
+bool ntpFailedWarning = false;
+unsigned long lastNtpSyncTime = 0;
+unsigned long lastNtpErrorAlertTime = 0;
+
+// Telegram Multi-Event Alert State Machine
+bool wasPowerOutage = false;
+bool hasInitializedPowerState = false;
+bool wasBleConnected = false;
+bool hasInitializedBleState = false;
+enum TempAlarmState { STATE_TEMP_NORMAL, STATE_TEMP_ALARM_LOW, STATE_TEMP_ALARM_HIGH };
+TempAlarmState currentTempAlarmState = STATE_TEMP_NORMAL;
+
+float lastSlopeTemp = -999.0;
+unsigned long lastRapidSlopeAlertTime = 0;
 
 void syncNtpTime() {
   Serial.println("[NTP] Syncing network time (GMT+3)...");
   // GMT+3 (Turkey / Europe/Istanbul) = 3 * 3600 = 10800s offset, 0 daylight saving
   configTime(3 * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
   struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 5000)) {
+  if (getLocalTime(&timeinfo, 6000)) {
     isTimeSynced = true;
+    ntpFailedWarning = false;
+    lastNtpSyncTime = millis();
     Serial.printf("[NTP] Time Synced Successfully: %02d.%02d.%04d %02d:%02d:%02d\n",
                   timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
                   timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   } else {
-    Serial.println("[NTP] Time Sync Failed or timed out.");
+    isTimeSynced = false;
+    ntpFailedWarning = true;
+    Serial.println("[NTP] ⚠️ Time Sync Failed or timed out.");
   }
 }
 
@@ -515,7 +534,7 @@ bool connectToAvailableWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
       Serial.printf("[WIFI] Connected to Primary! IP: %s\n", WiFi.localIP().toString().c_str());
-      if (!isTimeSynced) syncNtpTime();
+      if (!isTimeSynced || (millis() - lastNtpSyncTime >= 86400000UL)) syncNtpTime();
       return true;
     }
   }
@@ -539,7 +558,7 @@ bool connectToAvailableWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
       Serial.printf("[WIFI] Connected to Backup! IP: %s\n", WiFi.localIP().toString().c_str());
-      if (!isTimeSynced) syncNtpTime();
+      if (!isTimeSynced || (millis() - lastNtpSyncTime >= 86400000UL)) syncNtpTime();
       return true;
     }
   }
@@ -589,27 +608,105 @@ void executeSendCycle() {
     if (checkMenuAbort()) { WiFi.disconnect(true); return; }
 
     unsigned long now = millis();
-    float tMin = isPowerOutage ? cfgMgr.config.powerLossTempMin : cfgMgr.config.normalTempMin;
-    float tMax = isPowerOutage ? cfgMgr.config.powerLossTempMax : cfgMgr.config.normalTempMax;
 
-    if (hasFreshData && (measuredTemp < tMin || measuredTemp > tMax)) {
-      if (now - lastLimitAlertTime >= (unsigned long)cfgMgr.config.limitAlertIntervalMin * 60000UL) {
-        lastLimitAlertTime = now;
-        String alertMsg = "⚠️ TEMPERATURE ALERT!\nDevice: " + cfgMgr.config.bleTargetName +
-                          "\nTemp: " + String(measuredTemp, 2) + " °C" +
-                          "\nThreshold: " + String(tMin, 1) + " - " + String(tMax, 1) + " °C" +
-                          "\nPower: " + String(isPowerOutage ? "OUTAGE" : "ONLINE");
-        sendTelegramMessage(alertMsg);
+    // 1. Mains Power Outage & Restored (Independent of temperature)
+    if (!hasInitializedPowerState) {
+      wasPowerOutage = isPowerOutage;
+      hasInitializedPowerState = true;
+    } else {
+      if (isPowerOutage && !wasPowerOutage) {
+        wasPowerOutage = true;
+        lastPowerAlertTime = now;
+        if (cfgMgr.config.notifyTelegramOnPowerLoss) {
+          sendTelegramMessage("⚡ MAINS POWER OUTAGE DETECTED!\nElectricity cut off.\nDevice running on battery.\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
+        }
+      } else if (!isPowerOutage && wasPowerOutage) {
+        wasPowerOutage = false;
+        if (cfgMgr.config.notifyTelegramOnPowerLoss) {
+          sendTelegramMessage("🔌 MAINS POWER RESTORED!\nGrid electricity is back online.\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
+        }
+      } else if (isPowerOutage && (now - lastPowerAlertTime >= (unsigned long)cfgMgr.config.powerLossAlertIntervalMin * 60000UL)) {
+        lastPowerAlertTime = now;
+        if (cfgMgr.config.notifyTelegramOnPowerLoss) {
+          sendTelegramMessage("⚠️ POWER OUTAGE ONGOING!\nStill running on battery.\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
+        }
       }
     }
 
-    if (isPowerOutage) {
-      if (now - lastPowerAlertTime >= (unsigned long)cfgMgr.config.powerLossAlertIntervalMin * 60000UL) {
-        lastPowerAlertTime = now;
-        if (cfgMgr.config.notifyTelegramOnPowerLoss) {
-          sendTelegramMessage("🚨 POWER OUTAGE ALERT!\nMains electricity disconnected.\nRunning on battery.\nTemp: " + String(measuredTemp, 2) + " °C");
+    // 2. BLE Thermometer Connection & Disconnection Alerts
+    if (!hasInitializedBleState) {
+      wasBleConnected = bleConnectedStatus;
+      hasInitializedBleState = true;
+    } else {
+      if (!bleConnectedStatus && wasBleConnected) {
+        wasBleConnected = false;
+        sendTelegramMessage("⚠️ BLE SENSOR DISCONNECTED!\nNo packet received from thermometer.\nDevice: " + cfgMgr.config.bleTargetName + " (" + cfgMgr.config.bleTargetMac + ")");
+      } else if (bleConnectedStatus && !wasBleConnected) {
+        wasBleConnected = true;
+        sendTelegramMessage("✅ BLE SENSOR RECONNECTED!\nThermometer telemetry restored.\nDevice: " + cfgMgr.config.bleTargetName + "\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
+      }
+    }
+
+    // 3. NTP Timestamp Sync Error Alert
+    if (!isTimeSynced && ntpFailedWarning) {
+      if (now - lastNtpErrorAlertTime >= 3600000UL) { // Rate limit: max once per hour
+        lastNtpErrorAlertTime = now;
+        sendTelegramMessage("⚠️ NTP TIME SYNC ERROR!\nFailed to synchronize clock from NTP servers.\nDevice timestamp is unavailable.");
+      }
+    }
+
+    // 4. Low / High Temperature Alert & Normalization
+    float tMin = isPowerOutage ? cfgMgr.config.powerLossTempMin : cfgMgr.config.normalTempMin;
+    float tMax = isPowerOutage ? cfgMgr.config.powerLossTempMax : cfgMgr.config.normalTempMax;
+
+    if (hasFreshData) {
+      if (measuredTemp < tMin) {
+        if (currentTempAlarmState != STATE_TEMP_ALARM_LOW || (now - lastLimitAlertTime >= (unsigned long)cfgMgr.config.limitAlertIntervalMin * 60000UL)) {
+          currentTempAlarmState = STATE_TEMP_ALARM_LOW;
+          lastLimitAlertTime = now;
+          sendTelegramMessage("❄️ LOW TEMPERATURE ALERT (FREEZE RISK)!\nDevice: " + cfgMgr.config.bleTargetName +
+                              "\nMeasured: " + String(measuredTemp, 2) + " °C" +
+                              "\nLower Limit: " + String(tMin, 1) + " °C" +
+                              "\nDelta: " + String(measuredTemp - tMin, 2) + " °C below limit!" +
+                              "\nPower: " + String(isPowerOutage ? "OUTAGE (Battery)" : "ONLINE"));
+        }
+      } else if (measuredTemp > tMax) {
+        if (currentTempAlarmState != STATE_TEMP_ALARM_HIGH || (now - lastLimitAlertTime >= (unsigned long)cfgMgr.config.limitAlertIntervalMin * 60000UL)) {
+          currentTempAlarmState = STATE_TEMP_ALARM_HIGH;
+          lastLimitAlertTime = now;
+          sendTelegramMessage("🔥 HIGH TEMPERATURE ALERT (WARMTH BREACH)!\nDevice: " + cfgMgr.config.bleTargetName +
+                              "\nMeasured: " + String(measuredTemp, 2) + " °C" +
+                              "\nUpper Limit: " + String(tMax, 1) + " °C" +
+                              "\nDelta: +" + String(measuredTemp - tMax, 2) + " °C above limit!" +
+                              "\nPower: " + String(isPowerOutage ? "OUTAGE (Battery)" : "ONLINE"));
+        }
+      } else {
+        if (currentTempAlarmState != STATE_TEMP_NORMAL) {
+          currentTempAlarmState = STATE_TEMP_NORMAL;
+          sendTelegramMessage("✅ TEMPERATURE NORMALIZED!\nDevice: " + cfgMgr.config.bleTargetName +
+                              "\nTemperature returned to safe zone: " + String(measuredTemp, 2) + " °C" +
+                              "\nSafe Band: " + String(tMin, 1) + " - " + String(tMax, 1) + " °C");
         }
       }
+
+      // 5. Rapid Temperature Rise / Drop (Ani Sıcaklık Değişimi)
+      if (lastSlopeTemp > -900.0f) {
+        float deltaT = measuredTemp - lastSlopeTemp;
+        if (fabs(deltaT) >= 1.5f && (now - lastRapidSlopeAlertTime >= 600000UL)) { // >= 1.5 °C change, min 10 min cooldown
+          lastRapidSlopeAlertTime = now;
+          if (deltaT > 0) {
+            sendTelegramMessage("📈 RAPID TEMPERATURE RISE DETECTED!\nDevice: " + cfgMgr.config.bleTargetName +
+                                "\nSudden Jump: +" + String(deltaT, 2) + " °C" +
+                                "\nPrevious: " + String(lastSlopeTemp, 2) + " °C -> Current: " + String(measuredTemp, 2) + " °C" +
+                                "\n⚠️ Possible door open or cooling system fault!");
+          } else {
+            sendTelegramMessage("📉 RAPID TEMPERATURE DROP DETECTED!\nDevice: " + cfgMgr.config.bleTargetName +
+                                "\nSudden Drop: " + String(deltaT, 2) + " °C" +
+                                "\nPrevious: " + String(lastSlopeTemp, 2) + " °C -> Current: " + String(measuredTemp, 2) + " °C");
+          }
+        }
+      }
+      lastSlopeTemp = measuredTemp;
     }
   }
 
@@ -662,10 +759,10 @@ void drawNormalScreens() {
     bleConnectedStatus = false;
   }
 
-  bool hasError = (!wifiConnectedStatus || !bleConnectedStatus);
+  bool hasError = (!wifiConnectedStatus || !bleConnectedStatus || (!isTimeSynced && ntpFailedWarning));
   if (!isBrowsingScreens && hasError && currentInfoScr == SCR_MAIN_TEMP) {
-    unsigned long popCycle = millis() % 5000;
-    if (popCycle >= 3000) {
+    unsigned long popCycle = millis() % 6000;
+    if (popCycle >= 3500) {
       u8g2.setFont(u8g2_font_5x7_tf);
       if (!bleConnectedStatus) {
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 16, "! WARNING !");
@@ -675,6 +772,10 @@ void drawNormalScreens() {
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 16, "! WARNING !");
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 28, "Wi-Fi");
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 37, "Disconnected");
+      } else if (!isTimeSynced) {
+        u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 16, "! WARNING !");
+        u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 28, "NTP Time Sync");
+        u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 37, "Failed / Retrying");
       }
       u8g2.sendBuffer();
       return;
@@ -689,8 +790,9 @@ void drawNormalScreens() {
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, dName.c_str());
 
       String stat = "w:" + String(wifiConnectedStatus ? "V" : "X") + " b:" + String(bleConnectedStatus ? "V" : "X");
+      if (!isTimeSynced) stat += " !T";
       u8g2.setFont(u8g2_font_4x6_tf);
-      u8g2.drawStr(X_OFFSET + 40, Y_OFFSET + 8, stat.c_str());
+      u8g2.drawStr(X_OFFSET + 32, Y_OFFSET + 8, stat.c_str());
 
       if (everReceivedAnyData) {
         char str[12];

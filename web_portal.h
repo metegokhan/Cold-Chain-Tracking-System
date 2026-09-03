@@ -344,13 +344,13 @@ public:
       server.sendHeader("Content-Disposition", "attachment; filename=\"cold_chain_30d.csv\"");
       server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 
-      String csvMeta = "MAC:" + WiFi.macAddress() + "|CAL:" + cfgMgr.config.calDate + "|COUNT:" + String(historyCount);
+      String csvMeta = "MAC:" + ReportGenerator::getDeviceHardwareMac() + "|CAL:" + cfgMgr.config.calDate + "|COUNT:" + String(historyCount);
       String csvHash = ReportGenerator::computeIntegrityHash(csvMeta);
       String certId = ReportGenerator::getCertificateId(csvHash);
 
       String header = "# Thermo_Obs Cold Chain 30-Day Audit Data (Tamper-Proof Export)\r\n";
       header += "# Certificate ID: " + certId + "\r\n";
-      header += "# Hardware Identity (MAC): " + WiFi.macAddress() + "\r\n";
+      header += "# Hardware Identity (MAC): " + ReportGenerator::getDeviceHardwareMac() + "\r\n";
       header += "# Cryptographic SHA-256 Digest: " + csvHash + "\r\n";
       header += "# Calibration Date: " + cfgMgr.config.calDate + "\r\n";
       header += "# Calibration Points: Ref[2.0, 4.0, 6.0, 8.0] -> Sensor[" +
