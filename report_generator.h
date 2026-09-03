@@ -53,30 +53,53 @@ public:
     int border = 2;
     int totalDim = size + border * 2;
 
-    String svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 " + String(totalDim) + " " + String(totalDim) + "\" width=\"95\" height=\"95\" shape-rendering=\"crispEdges\">";
-    svg += "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>";
+    s_generatedQrSvg = "";
+    s_generatedQrSvg.reserve(3000);
+    s_generatedQrSvg += "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ";
+    s_generatedQrSvg += String(totalDim);
+    s_generatedQrSvg += " ";
+    s_generatedQrSvg += String(totalDim);
+    s_generatedQrSvg += "\" width=\"95\" height=\"95\" shape-rendering=\"crispEdges\">";
+    s_generatedQrSvg += "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>";
+    s_generatedQrSvg += "<path fill=\"#1a73e8\" d=\"";
 
+    char runBuf[32];
     for (int y = 0; y < size; y++) {
+      int runStart = -1;
       for (int x = 0; x < size; x++) {
         if (esp_qrcode_get_module(qrcode, x, y)) {
-          svg += "<rect x=\"" + String(x + border) + "\" y=\"" + String(y + border) + "\" width=\"1\" height=\"1\" fill=\"#1a73e8\"/>";
+          if (runStart == -1) runStart = x;
+        } else {
+          if (runStart != -1) {
+            int w = x - runStart;
+            snprintf(runBuf, sizeof(runBuf), "M%d,%dh%dv1h-%dz ", runStart + border, y + border, w, w);
+            s_generatedQrSvg += runBuf;
+            runStart = -1;
+          }
         }
       }
+      if (runStart != -1) {
+        int w = size - runStart;
+        snprintf(runBuf, sizeof(runBuf), "M%d,%dh%dv1h-%dz ", runStart + border, y + border, w, w);
+        s_generatedQrSvg += runBuf;
+      }
     }
-    svg += "</svg>";
-    s_generatedQrSvg = svg;
+    s_generatedQrSvg += "\"/></svg>";
   }
 
   static String generateQrSvg(const String& text) {
     s_generatedQrSvg = "";
     esp_qrcode_config_t cfg = {
       .display_func = qrDisplaySvgCallback,
-      .max_qrcode_version = 10,
+      .max_qrcode_version = 15,
       .qrcode_ecc_level = ESP_QRCODE_ECC_LOW
     };
     esp_err_t err = esp_qrcode_generate(&cfg, text.c_str());
+    Serial.printf("[QR] Encode URL: %s | Result: err=%d, svg_len=%d\n",
+                  text.c_str(), err, s_generatedQrSvg.length());
+
     if (err != ESP_OK || s_generatedQrSvg.length() == 0) {
-      return "<a href=\"" + text + "\" target=\"_blank\">Scan to Verify</a>";
+      return "<div style=\"width:95px;height:95px;background:#e8f0fe;border:2px dashed #1a73e8;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#1a73e8;font-size:10px;font-weight:bold;text-align:center;\">🛡️<br>SCAN TO<br>VERIFY</div>";
     }
     return s_generatedQrSvg;
   }
