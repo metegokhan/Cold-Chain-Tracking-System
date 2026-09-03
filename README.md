@@ -230,6 +230,7 @@ arduino-cli upload -p COM4 --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionSch
    - **Wi-Fi Settings:** Enter your primary and optional backup Wi-Fi credentials.
    - **Thermometer Pairing:** Click **🔄 Scan Nearby Thermometers** (5 seconds) and select your target sensor from the discovered list.
    - **Thresholds:** Set standard storage limits (Default: $2.0^\circ\text{C}$ to $8.0^\circ\text{C}$).
+   - **4-Point Calibration:** Map sensor readings against a certified master reference at $2.0^\circ\text{C}, 4.0^\circ\text{C}, 6.0^\circ\text{C}, 8.0^\circ\text{C}$ with automatic standard deviation ($\sigma$) calculation and optional security password lock.
    - **Alert Channels:** Enter your Google Sheets Web App URL, Telegram Bot Token, or Custom Webhook URL.
 5. Click **💾 SAVE ALL & RESTART**. The device saves all parameters to NVS and begins monitoring.
 
@@ -237,8 +238,8 @@ arduino-cli upload -p COM4 --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionSch
 
 ### Step 4: Exporting 30-Day Audit Reports & CSV Data
 At any point, access the Web Portal (`192.168.4.1`) or navigate via local network IP to access:
-- **📄 View / Print PDF Report (`/report`):** Generates a print-ready A4 compliance audit report complete with a 30-day time-series curve (Chart.js), Minimum/Maximum temperature timestamps, average temperature, and a breach duration table detailing exact exposure times for freeze risk ($\le 2.0^\circ\text{C}$) and warmth excursion ($\ge 8.0^\circ\text{C}$).
-- **📥 Download Raw CSV (`/export_csv`):** Downloads a clean, spreadsheet-compatible CSV containing every 5-minute measurement with exact timestamps.
+- **📄 View / Print PDF Report (`/report`):** Generates a print-ready A4 compliance audit report complete with a 30-day time-series curve (Chart.js), **Laboratory 4-Point Calibration Certificate with Standard Deviation ($\sigma$)**, Minimum/Maximum temperature timestamps, and excursion breach duration tables.
+- **📥 Download Raw CSV (`/export_csv`):** Downloads a clean, spreadsheet-compatible CSV with embedded calibration metadata headers and every 5-minute measurement with exact timestamps.
 - **ℹ️ About & Docs (`/about`):** Onboard technical manual including vector SVG flow diagrams, hardware pinouts, and regulatory liability documentation.
 
 ---

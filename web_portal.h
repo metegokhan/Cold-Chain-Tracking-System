@@ -188,6 +188,37 @@ private:
     html += "<label>Telegram Chat ID:</label>";
     html += "<input type=\"text\" name=\"tg_chat\" value=\"" + cfgMgr.config.telegramChatId + "\">";
     html += "</div>";
+    html += "<div class=\"card\">";
+    html += "<h2>🎯 7. 4-Point Temperature Calibration & Security Lock</h2>";
+    html += "<p style=\"font-size:13px;color:#5f6368;\">Map your sensor readings against a certified master reference thermometer at 4 critical cold-chain points (2°C, 4°C, 6°C, 8°C). The system applies piecewise linear interpolation and calculates the standard deviation (&sigma;).</p>";
+    
+    html += "<div style=\"background:#f1f3f4;padding:10px;border-radius:6px;margin-bottom:15px;font-size:13px;\">";
+    html += "  <strong>Active Profile Date:</strong> " + cfgMgr.config.calDate + "<br>";
+    html += "  <strong>Current Standard Deviation (&sigma;):</strong> &plusmn;" + String(cfgMgr.config.calStdDev, 2) + " &deg;C";
+    html += "</div>";
+
+    html += "<div style=\"display:grid;grid-template-columns:repeat(2,1fr);gap:10px;\">";
+    html += "  <div><label>Ref 2.0 &deg;C &rarr; Sensor Reads:</label><input type=\"number\" step=\"0.01\" name=\"cal_r2\" value=\"" + String(cfgMgr.config.calRaw2, 2) + "\"></div>";
+    html += "  <div><label>Ref 4.0 &deg;C &rarr; Sensor Reads:</label><input type=\"number\" step=\"0.01\" name=\"cal_r4\" value=\"" + String(cfgMgr.config.calRaw4, 2) + "\"></div>";
+    html += "  <div><label>Ref 6.0 &deg;C &rarr; Sensor Reads:</label><input type=\"number\" step=\"0.01\" name=\"cal_r6\" value=\"" + String(cfgMgr.config.calRaw6, 2) + "\"></div>";
+    html += "  <div><label>Ref 8.0 &deg;C &rarr; Sensor Reads:</label><input type=\"number\" step=\"0.01\" name=\"cal_r8\" value=\"" + String(cfgMgr.config.calRaw8, 2) + "\"></div>";
+    html += "</div>";
+
+    html += "<hr style=\"border:none;border-top:1px solid #eee;margin:15px 0;\">";
+    if (cfgMgr.config.calPassword.length() > 0) {
+      html += "<div style=\"color:#d93025;font-weight:bold;margin-bottom:8px;\">🔒 Password Protected: Authorization Required</div>";
+      html += "<label>Current Calibration Password:</label>";
+      html += "<input type=\"password\" name=\"cal_pass_auth\" placeholder=\"Enter password to apply calibration changes\">";
+      html += "<label>Change Password (leave blank to keep current):</label>";
+      html += "<input type=\"password\" name=\"cal_pass_new\" placeholder=\"New password (optional)\">";
+      html += "<input type=\"checkbox\" name=\"clear_cal_pass\" value=\"1\" id=\"cb_clear_cal\"><label style=\"display:inline;\" for=\"cb_clear_cal\"> Remove password protection (Unlock)</label>";
+    } else {
+      html += "<div style=\"color:#137333;font-weight:bold;margin-bottom:8px;\">🔓 Unlocked (No Password Set)</div>";
+      html += "<label>Set Optional Password to Lock Calibration:</label>";
+      html += "<input type=\"password\" name=\"cal_pass_new\" placeholder=\"Set password (leave blank to remain unlocked)\">";
+      html += "<small style=\"color:#5f6368;\">⚠️ Notice: If a password is set and forgotten, the firmware must be reflashed via USB to clear it.</small>";
+    }
+    html += "</div>";
 
     html += "<button type=\"submit\" id=\"save-btn\" class=\"btn\">💾 SAVE ALL & RESTART</button>";
     html += "</form>";
@@ -238,7 +269,17 @@ public:
     server.on("/export_csv", HTTP_GET, [this]() {
       server.sendHeader("Content-Disposition", "attachment; filename=\"cold_chain_30d.csv\"");
       server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-      server.send(200, "text/csv", "Timestamp,DateTime,Temperature_C,Status\r\n");
+
+      String header = "# Thermo_Obs Cold Chain 30-Day Audit Data\r\n";
+      header += "# Calibration Date: " + cfgMgr.config.calDate + "\r\n";
+      header += "# Calibration Points: Ref[2.0, 4.0, 6.0, 8.0] -> Sensor[" +
+                String(cfgMgr.config.calRaw2, 2) + ", " +
+                String(cfgMgr.config.calRaw4, 2) + ", " +
+                String(cfgMgr.config.calRaw6, 2) + ", " +
+                String(cfgMgr.config.calRaw8, 2) + "]\r\n";
+      header += "# Calibration Standard Deviation: " + String(cfgMgr.config.calStdDev, 2) + " C\r\n";
+      header += "Timestamp,DateTime,Temperature_C,Status\r\n";
+      server.send(200, "text/csv", header);
 
       for (int i = 0; i < historyCount; i++) {
         int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
@@ -319,6 +360,62 @@ public:
       if (server.hasArg("wh_url")) cfgMgr.config.webhookUrl = server.arg("wh_url");
       if (server.hasArg("tg_token")) cfgMgr.config.telegramBotToken = server.arg("tg_token");
       if (server.hasArg("tg_chat")) cfgMgr.config.telegramChatId = server.arg("tg_chat");
+
+      // Calibration Authorization & Update
+      bool canUpdateCal = false;
+      if (cfgMgr.config.calPassword.length() == 0) {
+        canUpdateCal = true;
+      } else {
+        if (server.hasArg("cal_pass_auth") && server.arg("cal_pass_auth") == cfgMgr.config.calPassword) {
+          canUpdateCal = true;
+        } else {
+          Serial.println("[PORTAL] Calibration save rejected: Incorrect authorization password!");
+        }
+      }
+
+      if (canUpdateCal) {
+        bool calChanged = false;
+        if (server.hasArg("cal_r2")) {
+          float v = server.arg("cal_r2").toFloat();
+          if (abs(v - cfgMgr.config.calRaw2) > 0.001f) { cfgMgr.config.calRaw2 = v; calChanged = true; }
+        }
+        if (server.hasArg("cal_r4")) {
+          float v = server.arg("cal_r4").toFloat();
+          if (abs(v - cfgMgr.config.calRaw4) > 0.001f) { cfgMgr.config.calRaw4 = v; calChanged = true; }
+        }
+        if (server.hasArg("cal_r6")) {
+          float v = server.arg("cal_r6").toFloat();
+          if (abs(v - cfgMgr.config.calRaw6) > 0.001f) { cfgMgr.config.calRaw6 = v; calChanged = true; }
+        }
+        if (server.hasArg("cal_r8")) {
+          float v = server.arg("cal_r8").toFloat();
+          if (abs(v - cfgMgr.config.calRaw8) > 0.001f) { cfgMgr.config.calRaw8 = v; calChanged = true; }
+        }
+
+        if (server.hasArg("clear_cal_pass")) {
+          cfgMgr.config.calPassword = "";
+        } else if (server.hasArg("cal_pass_new")) {
+          String newPass = server.arg("cal_pass_new");
+          newPass.trim();
+          if (newPass.length() > 0) {
+            cfgMgr.config.calPassword = newPass;
+          }
+        }
+
+        if (calChanged) {
+          time_t nowSec = time(nullptr);
+          if (nowSec > 1000000000) {
+            struct tm* t = localtime(&nowSec);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%02d.%02d.%04d %02d:%02d",
+                     t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+                     t->tm_hour, t->tm_min);
+            cfgMgr.config.calDate = String(buf);
+          } else {
+            cfgMgr.config.calDate = "Updated Profile";
+          }
+        }
+      }
 
       cfgMgr.save();
 

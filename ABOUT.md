@@ -1,4 +1,4 @@
-﻿# Thermo_Obs: System Architecture, Operation Workflow & Control Logic
+# Thermo_Obs: System Architecture, Operation Workflow & Control Logic
 
 This document provides a comprehensive technical breakdown of **Thermo_Obs**: what it monitors, how it evaluates thresholds, how it ensures flash memory longevity, and how it handles communications and user interaction.
 
@@ -110,3 +110,30 @@ The UI uses a single physical push-button (`GPIO 9`) connected with an internal 
   - Fills an on-screen animated progress bar and enters the **Configuration Menu**.
   - Provides access to WPS pairing, the standalone SoftAP Web Portal (`192.168.4.1`), and BLE Auto-Discovery.
   - Automatically saves history and soft-reboots after 10 seconds of menu inactivity.
+
+---
+
+## 🎯 4-Point Laboratory Calibration & Traceability Engine
+
+For pharmaceutical cold storage, multi-point calibration against a certified laboratory reference thermometer is mandatory. Thermo_Obs features a built-in 4-point calibration engine:
+
+### 1. Reference Points & Piecewise Linear Interpolation
+- **Reference Points:** $2.0^\circ\text{C}, 4.0^\circ\text{C}, 6.0^\circ\text{C}, 8.0^\circ\text{C}$.
+- **Factory Defaults:** $r_2 = 2.0, r_4 = 4.0, r_6 = 6.0, r_8 = 8.0$.
+- When a raw sensor reading $T_{raw}$ is received from the BLE thermometer, the calibrated temperature $T_{cal}$ is computed via piecewise linear interpolation:
+  $$T_{cal} = T_{ref,i} + \frac{T_{ref,i+1} - T_{ref,i}}{r_{i+1} - r_i} \cdot (T_{raw} - r_i)$$
+
+### 2. Standard Deviation ($\sigma$) & Error Evaluation
+At the 4 calibration points, the deviation errors $d_i = r_i - T_{ref,i}$ are calculated. The system computes the mean error $\bar{d}$ and the sample standard deviation:
+$$\sigma = \sqrt{\frac{1}{3}\sum_{i=1}^{4} (d_i - \bar{d})^2}$$
+This value is stored in NVS and published on all official audit certificates.
+
+### 3. Historical Traceability & Audit Integrity
+- When calibration values are modified, the system records the exact calibration timestamp.
+- **Historical Data Preservation:** Historical records in LittleFS flash are preserved with their original calibration values as recorded. The new calibration curve applies strictly to incoming telemetry from the update timestamp onward.
+- **PDF Report & CSV Metadata:** Both `/report` and `/export_csv` output the active calibration date, the 4 reference points, individual offsets ($\Delta$), and the standard deviation ($\sigma$).
+
+### 4. Optional Security Password Lock
+- Administrators can set an optional password to lock the calibration menu.
+- If a password is set, calibration parameters cannot be viewed or modified without entering the authorization key.
+- **Fail-Safe Security:** If the password is forgotten, it cannot be bypassed through the web interface; the device firmware must be reflashed via USB serial to clear NVS storage.

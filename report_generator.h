@@ -95,6 +95,7 @@ public:
     html += "th { background: #f1f3f4; font-weight: 600; }";
     html += ".badge-red { background: #fce8e6; color: #d93025; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
     html += ".badge-blue { background: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
+    html += ".badge-green { background: #e6f4ea; color: #137333; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
     html += ".no-print { margin-bottom: 15px; display: flex; gap: 10px; }";
     html += ".btn { background: #1a73e8; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; text-decoration: none; font-size: 14px; }";
     html += "@media print { body { background: #fff; padding: 0; } .report-container { box-shadow: none; padding: 0; } .no-print { display: none; } }";
@@ -162,6 +163,44 @@ public:
     html += "  <td>" + String(highEvents) + "</td>";
     html += "  <td>" + String(highViolHours, 1) + " hours (" + String(highViolSamples * 5) + " min)</td>";
     html += "  <td>" + String(highEvents > 0 ? "<span style=\"color:#d93025;font-weight:bold;\">VIOLATION DETECTED</span>" : "Compliant (0 hrs)") + "</td>";
+    html += "</tr>";
+    html += "</tbody></table>";
+
+    // Calibration Certificate & Traceability
+    float d2 = cfgMgr.config.calRaw2 - 2.0f;
+    float d4 = cfgMgr.config.calRaw4 - 4.0f;
+    float d6 = cfgMgr.config.calRaw6 - 6.0f;
+    float d8 = cfgMgr.config.calRaw8 - 8.0f;
+
+    html += "<div class=\"sec-title\">🎯 Laboratory 4-Point Temperature Calibration Certificate</div>";
+    html += "<table><thead><tr>";
+    html += "<th>Parameter</th><th>Point 1 (2.0 &deg;C)</th><th>Point 2 (4.0 &deg;C)</th><th>Point 3 (6.0 &deg;C)</th><th>Point 4 (8.0 &deg;C)</th><th>Overall Traceability</th>";
+    html += "</tr></thead><tbody>";
+    html += "<tr>";
+    html += "  <td><strong>Master Reference</strong></td><td>2.00 &deg;C</td><td>4.00 &deg;C</td><td>6.00 &deg;C</td><td>8.00 &deg;C</td>";
+    html += "  <td rowspan=\"3\" style=\"vertical-align:middle;background:#f8f9fa;\">";
+    html += "    <strong>Calibration Date:</strong><br><span class=\"badge-blue\">" + cfgMgr.config.calDate + "</span><br><br>";
+    html += "    <strong>Std Deviation (&sigma;):</strong><br><span class=\"badge-green\">&plusmn;" + String(cfgMgr.config.calStdDev, 2) + " &deg;C</span>";
+    html += "  </td>";
+    html += "</tr>";
+    html += "<tr>";
+    html += "  <td><strong>Sensor Raw Value</strong></td>";
+    html += "  <td>" + String(cfgMgr.config.calRaw2, 2) + " &deg;C</td>";
+    html += "  <td>" + String(cfgMgr.config.calRaw4, 2) + " &deg;C</td>";
+    html += "  <td>" + String(cfgMgr.config.calRaw6, 2) + " &deg;C</td>";
+    html += "  <td>" + String(cfgMgr.config.calRaw8, 2) + " &deg;C</td>";
+    html += "</tr>";
+    html += "<tr>";
+    html += "  <td><strong>Deviation Offset (&Delta;)</strong></td>";
+    char offBuf[32];
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d2);
+    html += "  <td>" + String(offBuf) + "</td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d4);
+    html += "  <td>" + String(offBuf) + "</td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d6);
+    html += "  <td>" + String(offBuf) + "</td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d8);
+    html += "  <td>" + String(offBuf) + "</td>";
     html += "</tr>";
     html += "</tbody></table>";
 

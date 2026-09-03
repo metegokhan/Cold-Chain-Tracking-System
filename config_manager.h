@@ -41,6 +41,15 @@ struct AppConfig {
   String webhookUrl;
   String telegramBotToken;
   String telegramChatId;
+
+  // 4-Point Laboratory Temperature Calibration (2.0°C, 4.0°C, 6.0°C, 8.0°C)
+  float calRaw2;         // Raw sensor reading when master reference is 2.0 °C
+  float calRaw4;         // Raw sensor reading when master reference is 4.0 °C
+  float calRaw6;         // Raw sensor reading when master reference is 6.0 °C
+  float calRaw8;         // Raw sensor reading when master reference is 8.0 °C
+  String calDate;        // Calibration date & time string
+  String calPassword;    // Optional calibration security password (empty = unlocked)
+  float calStdDev;       // Computed standard deviation across the 4 points
 };
 
 class ConfigManager {
@@ -105,7 +114,65 @@ public:
     config.telegramBotToken = prefs.getString("tg_token", "");
     config.telegramChatId = prefs.getString("tg_chat", "");
 
+    // 4-Point Calibration
+    config.calRaw2 = prefs.getFloat("cal_r2", 2.0f);
+    config.calRaw4 = prefs.getFloat("cal_r4", 4.0f);
+    config.calRaw6 = prefs.getFloat("cal_r6", 6.0f);
+    config.calRaw8 = prefs.getFloat("cal_r8", 8.0f);
+    config.calDate = prefs.getString("cal_date", "Factory Default (2, 4, 6, 8)");
+    config.calPassword = prefs.getString("cal_pass", "");
+    config.calStdDev = prefs.getFloat("cal_sd", 0.0f);
+
     prefs.end();
+  }
+
+  float calculateStdDev() {
+    float d1 = config.calRaw2 - 2.0f;
+    float d2 = config.calRaw4 - 4.0f;
+    float d3 = config.calRaw6 - 6.0f;
+    float d4 = config.calRaw8 - 8.0f;
+    float mean = (d1 + d2 + d3 + d4) / 4.0f;
+    float variance = ((d1 - mean) * (d1 - mean) +
+                      (d2 - mean) * (d2 - mean) +
+                      (d3 - mean) * (d3 - mean) +
+                      (d4 - mean) * (d4 - mean)) / 3.0f;
+    if (variance < 0.0f) variance = 0.0f;
+    return sqrt(variance);
+  }
+
+  float applyCalibration(float rawT) {
+    float r2 = config.calRaw2;
+    float r4 = config.calRaw4;
+    float r6 = config.calRaw6;
+    float r8 = config.calRaw8;
+
+    // Guard against identical or inverted points
+    if (r4 <= r2) r4 = r2 + 2.0f;
+    if (r6 <= r4) r6 = r4 + 2.0f;
+    if (r8 <= r6) r8 = r6 + 2.0f;
+
+    // Segment 1: rawT <= r2
+    if (rawT <= r2) {
+      float slope = (4.0f - 2.0f) / (r4 - r2);
+      return 2.0f + slope * (rawT - r2);
+    }
+    // Segment 2: r2 < rawT <= r4
+    else if (rawT <= r4) {
+      return 2.0f + ((4.0f - 2.0f) / (r4 - r2)) * (rawT - r2);
+    }
+    // Segment 3: r4 < rawT <= r6
+    else if (rawT <= r6) {
+      return 4.0f + ((6.0f - 4.0f) / (r6 - r4)) * (rawT - r4);
+    }
+    // Segment 4: r6 < rawT <= r8
+    else if (rawT <= r8) {
+      return 6.0f + ((8.0f - 6.0f) / (r8 - r6)) * (rawT - r6);
+    }
+    // Segment 5: rawT > r8
+    else {
+      float slope = (8.0f - 6.0f) / (r8 - r6);
+      return 8.0f + slope * (rawT - r8);
+    }
   }
 
   void save() {
@@ -141,6 +208,16 @@ public:
     prefs.putString("wh_url", config.webhookUrl);
     prefs.putString("tg_token", config.telegramBotToken);
     prefs.putString("tg_chat", config.telegramChatId);
+
+    // 4-Point Calibration
+    config.calStdDev = calculateStdDev();
+    prefs.putFloat("cal_r2", config.calRaw2);
+    prefs.putFloat("cal_r4", config.calRaw4);
+    prefs.putFloat("cal_r6", config.calRaw6);
+    prefs.putFloat("cal_r8", config.calRaw8);
+    prefs.putString("cal_date", config.calDate);
+    prefs.putString("cal_pass", config.calPassword);
+    prefs.putFloat("cal_sd", config.calStdDev);
 
     prefs.end();
   }

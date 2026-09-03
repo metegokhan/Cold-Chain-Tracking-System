@@ -364,7 +364,8 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 
           if (cfgMgr.config.bleTargetMac.length() > 0 && sysMode == MODE_NORMAL_RUN) {
             if (currentMac.equalsIgnoreCase(cfgMgr.config.bleTargetMac)) {
-              measuredTemp = t;
+              float rawT = t;
+              measuredTemp = cfgMgr.applyCalibration(rawT);
               measuredHum = h;
               measuredBattery = b;
               measuredVoltage = v;
@@ -372,7 +373,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
               measuredDeviceName = cfgMgr.config.bleTargetName;
               measuredMacAddress = currentMac;
 
-              lastDispTemp = t;
+              lastDispTemp = measuredTemp;
               lastDispHum = h;
               lastDispBattery = b;
               lastDispVoltage = v;
@@ -1029,7 +1030,7 @@ void loop() {
       cfgMgr.config.bleTargetName = candidateName;
       cfgMgr.save();
 
-      measuredTemp = candidateTemp;
+      measuredTemp = cfgMgr.applyCalibration(candidateTemp);
       measuredHum = candidateHum;
       measuredBattery = candidateBattery;
       measuredVoltage = candidateVoltage;
@@ -1038,7 +1039,7 @@ void loop() {
       measuredMacAddress = candidateMac;
       hasFreshData = true;
 
-      lastDispTemp = candidateTemp;
+      lastDispTemp = measuredTemp;
       lastDispHum = candidateHum;
       lastDispBattery = candidateBattery;
       lastDispVoltage = candidateVoltage;
