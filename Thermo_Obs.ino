@@ -862,6 +862,32 @@ void setup() {
   startBLEScanForMode();
 }
 
+void drawPortalScreen() {
+  u8g2.clearBuffer();
+  u8g2.drawRFrame(X_OFFSET, Y_OFFSET, SCREEN_W, SCREEN_H, 2);
+  u8g2.setFont(u8g2_font_6x10_tf);
+  
+  int w1 = u8g2.getStrWidth("Thermo_Obs");
+  u8g2.drawStr(X_OFFSET + (SCREEN_W - w1) / 2, Y_OFFSET + 12, "Thermo_Obs");
+
+  int w2 = u8g2.getStrWidth(cfgMgr.config.apPassword.c_str());
+  u8g2.drawStr(X_OFFSET + (SCREEN_W - w2) / 2, Y_OFFSET + 24, cfgMgr.config.apPassword.c_str());
+
+  u8g2.setFont(u8g2_font_5x7_tf);
+  int stations = WiFi.softAPgetStationNum();
+  if (stations > 0) {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Clients: %d", stations);
+    int w3 = u8g2.getStrWidth(buf);
+    u8g2.drawStr(X_OFFSET + (SCREEN_W - w3) / 2, Y_OFFSET + 35, buf);
+  } else {
+    int w3 = u8g2.getStrWidth("192.168.4.1");
+    u8g2.drawStr(X_OFFSET + (SCREEN_W - w3) / 2, Y_OFFSET + 35, "192.168.4.1");
+  }
+
+  u8g2.sendBuffer();
+}
+
 void handleButtonState() {
   static bool wasPressed = false;
   static unsigned long localPressStart = 0;
@@ -892,6 +918,7 @@ void handleButtonState() {
         sysMode = MODE_WIFI_PORTAL;
         stopBLE();
         portal.start();
+        drawPortalScreen();
       } else if (menuSelection == 2) {
         sysMode = MODE_MANUAL_BLE_DISCOVERY;
         cfgMgr.clearBLE();
@@ -982,21 +1009,13 @@ void loop() {
   if (sysMode == MODE_WIFI_PORTAL) {
     portal.handle();
 
-    u8g2.clearBuffer();
-    u8g2.drawRFrame(X_OFFSET, Y_OFFSET, SCREEN_W, SCREEN_H, 2);
-    u8g2.setFont(u8g2_font_6x10_tf);
-    
-    int w1 = u8g2.getStrWidth("Thermo_Obs");
-    u8g2.drawStr(X_OFFSET + (SCREEN_W - w1) / 2, Y_OFFSET + 12, "Thermo_Obs");
+    static unsigned long lastPortalOled = 0;
+    if (millis() - lastPortalOled >= 1000) {
+      lastPortalOled = millis();
+      drawPortalScreen();
+    }
 
-    int w2 = u8g2.getStrWidth(cfgMgr.config.apPassword.c_str());
-    u8g2.drawStr(X_OFFSET + (SCREEN_W - w2) / 2, Y_OFFSET + 24, cfgMgr.config.apPassword.c_str());
-
-    u8g2.setFont(u8g2_font_5x7_tf);
-    int w3 = u8g2.getStrWidth("192.168.4.1");
-    u8g2.drawStr(X_OFFSET + (SCREEN_W - w3) / 2, Y_OFFSET + 35, "192.168.4.1");
-
-    u8g2.sendBuffer();
+    delay(2); // Yield CPU to Wi-Fi driver, DHCP server, and FreeRTOS tasks!
     return;
   }
 

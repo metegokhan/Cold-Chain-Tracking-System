@@ -238,16 +238,44 @@ public:
   WebPortal() : server(80) {}
 
   void start() {
+    Serial.println("[PORTAL] Initializing SoftAP mode...");
     WiFi.disconnect(true);
+    delay(100);
     WiFi.mode(WIFI_AP);
+    delay(50);
+    WiFi.setSleep(false); // Keep Wi-Fi radio fully active for reliable phone association
 
     IPAddress local_ip(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_ip, gateway, subnet);
 
-    WiFi.softAP("Thermo_Obs", cfgMgr.config.apPassword.c_str());
+    bool apOk = WiFi.softAP("Thermo_Obs", cfgMgr.config.apPassword.c_str(), 1, 0, 4);
+    if (apOk) {
+      Serial.printf("[PORTAL] AP Started: Thermo_Obs | Password: %s | IP: 192.168.4.1\n", cfgMgr.config.apPassword.c_str());
+    } else {
+      Serial.println("[PORTAL] ❌ WiFi.softAP() FAILED to start!");
+    }
+
     dnsServer.start(53, "*", local_ip);
+
+    // Diagnostics for phone connection tracking
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+      if (event == ARDUINO_EVENT_WIFI_AP_START) {
+        Serial.println("[AP] SoftAP Started.");
+      } else if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+        Serial.printf("[AP] 📱 Phone Associated! MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
+                      info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
+                      info.wifi_ap_staconnected.mac[4], info.wifi_ap_staconnected.mac[5]);
+      } else if (event == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED) {
+        Serial.printf("[AP] 🌐 Phone assigned IP: %s\n", IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
+      } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
+        Serial.println("[AP] 📴 Phone Disconnected.");
+      }
+    });
+
+    Serial.printf("[PORTAL] Free Heap: %d bytes (Min Ever: %d bytes)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
     server.on("/", HTTP_GET, [this]() {
       server.sendHeader("Connection", "close");
