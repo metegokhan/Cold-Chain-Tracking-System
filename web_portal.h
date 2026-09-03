@@ -277,13 +277,44 @@ public:
 
     Serial.printf("[PORTAL] Free Heap: %d bytes (Min Ever: %d bytes)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
-    server.on("/", HTTP_GET, [this]() {
+    // Captive Portal Detection Endpoints (Android, iOS, Windows)
+    server.on("/generate_204", HTTP_ANY, [this]() {
+      Serial.println("[PORTAL] Captive probe /generate_204 (Android)");
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+    server.on("/gen_204", HTTP_ANY, [this]() {
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+    server.on("/hotspot-detect.html", HTTP_ANY, [this]() {
+      Serial.println("[PORTAL] Captive probe /hotspot-detect.html (Apple iOS)");
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+    server.on("/canonical.html", HTTP_ANY, [this]() {
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+    server.on("/connecttest.txt", HTTP_ANY, [this]() {
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+    server.on("/ncsi.txt", HTTP_ANY, [this]() {
+      server.sendHeader("Location", "http://192.168.4.1/");
+      server.send(302, "text/plain", "");
+    });
+
+    server.on("/", HTTP_ANY, [this]() {
+      Serial.printf("[PORTAL] 📄 Serving / (index page) to client. Free Heap: %d bytes\n", ESP.getFreeHeap());
       server.sendHeader("Connection", "close");
       server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       server.send(200, "text/html; charset=utf-8", buildHtml());
+      Serial.println("[PORTAL] ✅ / (index page) served successfully.");
     });
 
     server.on("/report", HTTP_GET, [this]() {
+      Serial.println("[PORTAL] Serving /report...");
       server.sendHeader("Connection", "close");
       server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       server.send(200, "text/html; charset=utf-8", ReportGenerator::buildPdfReportHtml());
@@ -470,6 +501,9 @@ public:
     });
 
     server.onNotFound([this]() {
+      String uri = server.uri();
+      String host = server.hostHeader();
+      Serial.printf("[PORTAL] 🔀 onNotFound: Host: %s | URI: %s -> Redirecting to /\n", host.c_str(), uri.c_str());
       server.sendHeader("Location", "http://192.168.4.1/");
       server.send(302, "text/plain", "");
     });
