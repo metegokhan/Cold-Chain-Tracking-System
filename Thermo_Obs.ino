@@ -438,6 +438,8 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 
 void startWPSProcess() {
   stopBLE();
+  BLEDevice::deinit(true);
+  pBLEScan = nullptr;
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true);
 
@@ -917,6 +919,8 @@ void handleButtonState() {
       } else if (menuSelection == 1) {
         sysMode = MODE_WIFI_PORTAL;
         stopBLE();
+        BLEDevice::deinit(true); // Releases ~120KB of Bluedroid RAM for Wi-Fi AP & WebServer!
+        pBLEScan = nullptr;
         portal.start();
         drawPortalScreen();
       } else if (menuSelection == 2) {
