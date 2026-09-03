@@ -14,6 +14,66 @@ Built around the ultra-compact **ESP32-C3 0.42" OLED development board** (RISC-V
 
 ---
 
+## 🗺️ System Architecture & Operation Workflow
+
+Thermo_Obs monitors cold-chain conditions through a non-blocking state machine balancing BLE radio polling, dual-mode Wi-Fi failover, mains power monitoring, local 30-day wear-leveled flash persistence, and instant emergency alerts.
+
+For a detailed technical walkthrough, check the dedicated guide: [**ABOUT.md (System Architecture & Control Logic)**](ABOUT.md).
+
+![Thermo_Obs System Architecture & Operation Workflow](workflow_diagram.svg)
+
+<details>
+<summary><b>🔍 Click to view interactive End-to-End Mermaid Flowchart</b></summary>
+
+```mermaid
+flowchart TD
+    subgraph BOOT ["1. Boot & Hardware Initialization"]
+        Start([Device Power-On / Reboot]) --> MountFS["Mount LittleFS & Read /history.bin<br/>(Restores 30-day rolling history to RAM)"]
+        MountFS --> LoadNVS["Read Configuration from NVS<br/>(Wi-Fi, Target BLE MAC, Thresholds)"]
+        LoadNVS --> InitPins["Configure GPIO Pins<br/>• GPIO 9: BOOT Button (Interrupt)<br/>• GPIO 4: Mains Power Sensing Input<br/>• I2C (5,6): 0.42'' OLED Display"]
+    end
+
+    subgraph UI_CONTROL ["2. Button Interaction & Screen Engine"]
+        InitPins --> BtnCheck{"BOOT Button (GPIO 9)<br/>Press Duration?"}
+        BtnCheck -- "Held >= 5.0 Seconds" --> MenuMode["CONFIG MENU<br/>1. WPS Wi-Fi Setup<br/>2. Web Portal (192.168.4.1)<br/>3. BLE Auto-Discover"]
+        BtnCheck -- "Short Press (50-1500 ms)" --> CycleScr["Cycle 8 Real-Time OLED Screens<br/>(Background BLE paused for zero UI lag)"]
+        BtnCheck -- "Not Pressed" --> StateMachine
+    end
+
+    subgraph StateMachine ["3. Continuous 3-Stage State Machine"]
+        ScanBLE["STAGE 1: STATE_SCAN_BLE<br/>• Wi-Fi Radio OFF (Zero 2.4GHz interference)<br/>• Listen for BTHome V2 BLE Beacons (0xFCD2)"]
+        ScanBLE --> PktCheck{"Packet from Target<br/>Thermometer Received?"}
+        PktCheck -- "Yes (Fresh Data)" --> DecodeBLE["Decode BTHome V2 Payload:<br/>• 0x02: Temperature (°C)<br/>• 0x03: Humidity (%RH)<br/>• 0x0C: Battery Voltage (V)<br/>• 0x01: Battery Level (%)<br/>• RSSI (dBm)"]
+        PktCheck -- "No (185s Timeout)" --> BleTimeout["Trigger Auto-Discovery Fallback<br/>or Submit Empty Telemetry Packet"]
+        
+        DecodeBLE --> SendWiFi["STAGE 2: STATE_SEND_WIFI<br/>• Stop BLE Scanner<br/>• Enable Wi-Fi Station Mode<br/>(Primary SSID with failover to Backup SSID)"]
+        BleTimeout --> SendWiFi
+        
+        SendWiFi --> SyncNTP["Synchronize NTP Network Clock (GMT+3)"]
+        SyncNTP --> LimitCheck{"Temperature Limit Breached?<br/>( < 2.0°C or > 8.0°C )"}
+        LimitCheck -- "Yes (Breach)" --> SendAlarm["Telegram Bot & Webhook:<br/>🚨 TEMPERATURE BREACH ALARM!"]
+        LimitCheck -- "No (Safe)" --> PwrCheck{"Mains Power Lost?<br/>(Read GPIO 4)"}
+        
+        SendAlarm --> PwrCheck
+        PwrCheck -- "Yes (Outage)" --> SendPwrAlarm["Telegram Bot:<br/>🚨 MAINS POWER OUTAGE ALERT!"]
+        PwrCheck -- "No (Online)" --> PostSheets["Submit Telemetry to Google Sheets<br/>(doGet / doPost Append)"]
+        SendPwrAlarm --> PostSheets
+
+        PostSheets --> CloseWiFi["Disable Wi-Fi (WIFI_OFF)<br/>• Saves power<br/>• Frees RF radio for BLE"]
+        CloseWiFi --> WaitInterval["STAGE 3: STATE_WAIT_INTERVAL<br/>• Wait for configured interval (e.g. 60s)<br/>• Non-blocking millis() timing<br/>• UI & button navigation remain active"]
+        WaitInterval --> ScanBLE
+    end
+
+    subgraph BACKGROUND ["4. Independent Background Engines"]
+        Timer5m["Every 5 Minutes (300,000 ms)"] --> AddRamSample["Add Sample to RAM Rolling Buffer<br/>(Timestamp + Temp * 10 | 8,640 slots = 30 Days)"]
+        Timer30m["Every 30 Minutes (1,800,000 ms)"] --> FlushFlash["Write History to LittleFS Flash<br/>(Wear-Leveled /history.bin File)"]
+        WebReq["Client Accesses Web Portal"] --> ServeReport["Serve Web Endpoints:<br/>• /report: Dynamic PDF Audit Report (Chart.js)<br/>• /export_csv: Raw 30-Day CSV Download<br/>• /about: Onboard Hardware Manual & SVG"]
+    end
+```
+</details>
+
+---
+
 ## 📱 Visual Menu & Screen Hierarchy
 
 The entire device interface is operated using a **single physical button (BOOT button - GPIO 9)**.
