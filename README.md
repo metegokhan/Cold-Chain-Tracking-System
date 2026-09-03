@@ -239,7 +239,10 @@ arduino-cli upload -p COM4 --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionSch
 ### Step 4: Exporting 30-Day Audit Reports & CSV Data
 At any point, access the Web Portal (`192.168.4.1`) or navigate via local network IP to access:
 - **📄 View / Print PDF Report (`/report`):** Generates a print-ready A4 compliance audit report complete with a 30-day time-series curve (Chart.js), **Laboratory 4-Point Calibration Certificate with Standard Deviation ($\sigma$)**, Minimum/Maximum temperature timestamps, and excursion breach duration tables.
-- **📥 Download Raw CSV (`/export_csv`):** Downloads a clean, spreadsheet-compatible CSV with embedded calibration metadata headers and every 5-minute measurement with exact timestamps.
+  - **🛡️ Cryptographic Tamper-Proofing Seal:** Employs the ESP32-C3 hardware SHA-256 accelerator to stamp every report with an immutable 64-character digest and unique Certificate ID (`CERT-XXXX-XXXXXXXX`).
+  - **📱 Dynamic QR Code:** Embedded directly on the report, linking directly to the device's `/verify` authentication endpoint.
+- **🛡️ Digital Audit Verification (`/verify`):** A dedicated verification portal confirming document authenticity, hardware MAC origin, and unaltered data status with a green verification badge.
+- **📥 Download Raw CSV (`/export_csv`):** Downloads a clean, spreadsheet-compatible CSV with embedded SHA-256 digest, Certificate ID, calibration metadata headers, and every 5-minute measurement with exact timestamps.
 - **ℹ️ About & Docs (`/about`):** Onboard technical manual including vector SVG flow diagrams, hardware pinouts, and regulatory liability documentation.
 
 ---

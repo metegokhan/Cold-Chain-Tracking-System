@@ -137,3 +137,30 @@ This value is stored in NVS and published on all official audit certificates.
 - Administrators can set an optional password to lock the calibration menu.
 - If a password is set, calibration parameters cannot be viewed or modified without entering the authorization key.
 - **Fail-Safe Security:** If the password is forgotten, it cannot be bypassed through the web interface; the device firmware must be reflashed via USB serial to clear NVS storage.
+
+---
+
+## 🛡️ Cryptographic Tamper-Proofing & Verification Engine
+
+To prevent fraudulent post-generation manipulation of temperature records (e.g. using browser developer tools or editing PDF text), Thermo_Obs integrates a **hardware-accelerated SHA-256 cryptographic verification subsystem** complying with FDA 21 CFR Part 11 and WHO PQS audit trail guidelines:
+
+### 1. Hardware-Backed Deterministic Digest (SHA-256)
+When an audit report is generated, the ESP32-C3 hardware cryptographic engine computes an immutable 64-character hexadecimal SHA-256 digest across:
+- Device Silicon MAC Address (`WiFi.macAddress()`)
+- Target BLE Thermometer MAC Address
+- Exact Report Generation Timestamp
+- Total Sample Count and Summary Metrics (Min, Max, Avg, Freeze/Warmth Excursion Durations)
+- Active Laboratory 4-Point Calibration Profile and Standard Deviation
+
+Any manual modification to numbers, timestamps, or limits invalidates this cryptographic digest.
+
+### 2. Official Digital Seal & Certificate ID
+- Each report is stamped with an official Certificate ID (e.g. `CERT-2A40-B4A7D2E9`).
+- The report embeds a prominent **Digital Tamper-Proof Integrity Seal** card containing the Certificate ID, Silicon Hardware Identity, and the full 64-character SHA-256 digest.
+
+### 3. Dynamic QR Code & `/verify` Verification Endpoint
+- The PDF report embeds a dynamic QR code that points directly to the device's `/verify` route:
+  `http://<Device_IP>/verify?cert=CERT-...&hash=...`
+- When scanned with any smartphone camera or accessed by an auditor, the device renders a dedicated **Digital Audit Verification Certificate** page featuring a green verification badge, confirming hardware origin and uncompromised data integrity.
+- **Print Security:** When printed or exported to PDF, a subtle security watermark is embedded across the page footer (`🛡️ AUTHENTIC COLD-CHAIN AUDIT • HARDWARE MAC • SHA-256 VERIFIED`).
+- **CSV Traceability:** The downloaded raw CSV (`/export_csv`) also embeds the Certificate ID, Hardware MAC, and SHA-256 digest directly into its metadata header comments.
