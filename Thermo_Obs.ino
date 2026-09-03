@@ -8,7 +8,9 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
+#include <LittleFS.h>
+#include <time.h>
+#include "history_manager.h"
 #include "config_manager.h"
 #include "web_portal.h"
 
@@ -63,8 +65,8 @@ enum InfoScreen {
   SCR_HUMIDITY,      // 1: Humidity Screen
   SCR_BATTERY,       // 2: Battery Screen (% and Voltage)
   SCR_RSSI,          // 3: BLE Signal Strength (dBm)
-  SCR_MIN_TEMP,      // 4: 36h Minimum Temp & Duration
-  SCR_MAX_TEMP,      // 5: 36h Maximum Temp & Duration
+  SCR_MIN_TEMP,      // 4: 30d Minimum Temp & Duration
+  SCR_MAX_TEMP,      // 5: 30d Maximum Temp & Duration
   SCR_WIFI_INFO,     // 6: Wi-Fi Status & IP Address
   SCR_BLE_INFO,      // 7: BLE Device Name & MAC Address
   SCR_TOTAL_COUNT
@@ -72,7 +74,7 @@ enum InfoScreen {
 
 InfoScreen currentInfoScr = SCR_MAIN_TEMP;
 unsigned long lastScreenSwitchTime = 0;
-bool isBrowsingScreens = false; // Kullanıcı ekranlarda gezinirken true olur
+bool isBrowsingScreens = false; // True while user is actively browsing screens
 
 // State Machine
 enum NormalAppState {
@@ -107,24 +109,87 @@ unsigned long lastBlePacketReceivedTime = 0;
 bool wifiConnectedStatus = false;
 bool bleConnectedStatus = false;
 
-// 36h Min/Max History Buffer (2160 Minutes)
-const int HISTORY_SIZE = 2160; 
-int16_t tempHistory[HISTORY_SIZE];
+// 30 Days Min/Max History Buffer (8640 samples: 30 days * 24 hours * 12 samples/hour @ 5 min intervals)
+TempRecord tempHistory[HISTORY_SIZE];
 int historyHead = 0;
 int historyCount = 0;
 unsigned long lastHistorySampleTime = 0;
+unsigned long lastHistorySaveTime = 0;
+const char* HISTORY_FILE_PATH = "/history.bin";
+
+// NTP Time Synchronization status
+bool isTimeSynced = false;
+
+void syncNtpTime() {
+  Serial.println("[NTP] Syncing network time (GMT+3)...");
+  // GMT+3 (Turkey / Europe/Istanbul) = 3 * 3600 = 10800s offset, 0 daylight saving
+  configTime(3 * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo, 5000)) {
+    isTimeSynced = true;
+    Serial.printf("[NTP] Time Synced Successfully: %02d.%02d.%04d %02d:%02d:%02d\n",
+                  timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900,
+                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  } else {
+    Serial.println("[NTP] Time Sync Failed or timed out.");
+  }
+}
+
+void saveHistoryToFS() {
+  File f = LittleFS.open(HISTORY_FILE_PATH, "w");
+  if (!f) {
+    Serial.println("[LittleFS] Failed to open history file for writing!");
+    return;
+  }
+  f.write((uint8_t*)&historyHead, sizeof(historyHead));
+  f.write((uint8_t*)&historyCount, sizeof(historyCount));
+  f.write((uint8_t*)tempHistory, sizeof(tempHistory));
+  f.close();
+  Serial.printf("[LittleFS] Successfully saved history to flash (%d samples, %u bytes)\n", historyCount, (unsigned int)sizeof(tempHistory));
+}
+
+void loadHistoryFromFS() {
+  if (!LittleFS.exists(HISTORY_FILE_PATH)) {
+    Serial.println("[LittleFS] No existing history file found. Starting fresh.");
+    return;
+  }
+  File f = LittleFS.open(HISTORY_FILE_PATH, "r");
+  if (!f) {
+    Serial.println("[LittleFS] Failed to open history file for reading!");
+    return;
+  }
+  if (f.size() != (sizeof(historyHead) + sizeof(historyCount) + sizeof(tempHistory))) {
+    Serial.println("[LittleFS] History file size mismatch or structure changed, resetting history.");
+    f.close();
+    LittleFS.remove(HISTORY_FILE_PATH);
+    return;
+  }
+  f.read((uint8_t*)&historyHead, sizeof(historyHead));
+  f.read((uint8_t*)&historyCount, sizeof(historyCount));
+  f.read((uint8_t*)tempHistory, sizeof(tempHistory));
+  f.close();
+  if (historyHead < 0 || historyHead >= HISTORY_SIZE) historyHead = 0;
+  if (historyCount < 0 || historyCount > HISTORY_SIZE) historyCount = 0;
+  Serial.printf("[LittleFS] Loaded history from flash: %d samples restored.\n", historyCount);
+}
 
 void addTempSample(float t) {
+  time_t nowSec = time(nullptr);
+  uint32_t currentEpoch = (uint32_t)nowSec;
+  // If time is not synced yet, record epoch as 0
+  if (nowSec < 1000000000) currentEpoch = 0;
+
   int16_t val = (int16_t)(round(t * 10.0));
-  tempHistory[historyHead] = val;
+  tempHistory[historyHead].timestamp = currentEpoch;
+  tempHistory[historyHead].temp = val;
   historyHead = (historyHead + 1) % HISTORY_SIZE;
   if (historyCount < HISTORY_SIZE) historyCount++;
 }
 
-void get36hMinMax(float &outMin, int &outMinDurationMin, float &outMax, int &outMaxDurationMin) {
+void get30dMinMax(float &outMin, int &outMinDurationHours, float &outMax, int &outMaxDurationHours) {
   if (historyCount == 0) {
-    outMin = 0.0; outMinDurationMin = 0;
-    outMax = 0.0; outMaxDurationMin = 0;
+    outMin = 0.0; outMinDurationHours = 0;
+    outMax = 0.0; outMaxDurationHours = 0;
     return;
   }
 
@@ -132,7 +197,7 @@ void get36hMinMax(float &outMin, int &outMinDurationMin, float &outMax, int &out
   int16_t maxVal = -30000;
 
   for (int i = 0; i < historyCount; i++) {
-    int16_t v = tempHistory[i];
+    int16_t v = tempHistory[i].temp;
     if (v < minVal) minVal = v;
     if (v > maxVal) maxVal = v;
   }
@@ -145,17 +210,18 @@ void get36hMinMax(float &outMin, int &outMinDurationMin, float &outMax, int &out
   int maxBandLow = maxVal - 5;
   int maxBandHigh = maxVal + 5;
 
-  int minDur = 0;
-  int maxDur = 0;
+  int minDurSamples = 0;
+  int maxDurSamples = 0;
 
   for (int i = 0; i < historyCount; i++) {
-    int16_t v = tempHistory[i];
-    if (v >= minBandLow && v <= minBandHigh) minDur++;
-    if (v >= maxBandLow && v <= maxBandHigh) maxDur++;
+    int16_t v = tempHistory[i].temp;
+    if (v >= minBandLow && v <= minBandHigh) minDurSamples++;
+    if (v >= maxBandLow && v <= maxBandHigh) maxDurSamples++;
   }
 
-  outMinDurationMin = minDur;
-  outMaxDurationMin = maxDur;
+  // Each sample is 5 minutes -> total minutes = minDurSamples * 5 -> convert to hours:
+  outMinDurationHours = (minDurSamples * 5 + 30) / 60;
+  outMaxDurationHours = (maxDurSamples * 5 + 30) / 60;
 }
 
 // Power Status
@@ -446,6 +512,7 @@ bool connectToAvailableWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
       Serial.printf("[WIFI] Connected to Primary! IP: %s\n", WiFi.localIP().toString().c_str());
+      if (!isTimeSynced) syncNtpTime();
       return true;
     }
   }
@@ -469,6 +536,7 @@ bool connectToAvailableWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
       Serial.printf("[WIFI] Connected to Backup! IP: %s\n", WiFi.localIP().toString().c_str());
+      if (!isTimeSynced) syncNtpTime();
       return true;
     }
   }
@@ -565,7 +633,7 @@ void drawNormalScreens() {
   u8g2.clearBuffer();
   u8g2.drawRFrame(X_OFFSET, Y_OFFSET, SCREEN_W, SCREEN_H, 2);
 
-  // 1. Progress Bar (1.5s uzeri basili tutuluyorsa)
+  // 1. Progress Bar (when held for more than 1.5s)
   if (btnIsPressed && sysMode == MODE_NORMAL_RUN) {
     unsigned long heldTime = millis() - btnPressStart;
     if (heldTime >= 1500) {
@@ -579,13 +647,13 @@ void drawNormalScreens() {
     }
   }
 
-  // 2. 10s Inactivity -> Ana Ekrana Don ve Gezinme Modundan Cik
+  // 2. 10s Inactivity -> Return to Main Screen & exit browsing mode
   if (isBrowsingScreens && (millis() - lastScreenSwitchTime >= 10000)) {
     isBrowsingScreens = false;
     currentInfoScr = SCR_MAIN_TEMP;
   }
 
-  // 3. Error Pop-up (Sadece kullanici gezinmiyorken ve Ana Ekrandayken gosterilir!)
+  // 3. Error Pop-up (Only shown on Main Screen when user is not browsing)
   unsigned long timeoutMs = (unsigned long)cfgMgr.config.stageTimeoutSec * 1000UL;
   if (millis() - lastBlePacketReceivedTime >= timeoutMs) {
     bleConnectedStatus = false;
@@ -682,11 +750,11 @@ void drawNormalScreens() {
 
     case SCR_MIN_TEMP: {
       float minT, maxT;
-      int minDur, maxDur;
-      get36hMinMax(minT, minDur, maxT, maxDur);
+      int minDurH, maxDurH;
+      get30dMinMax(minT, minDurH, maxT, maxDurH);
 
       u8g2.setFont(u8g2_font_5x7_tf);
-      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, "36h MINIMUM");
+      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, "30d MINIMUM");
 
       char tStr[12];
       sprintf(tStr, "%+.1f\xb0", minT);
@@ -694,7 +762,11 @@ void drawNormalScreens() {
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 27, tStr);
 
       char durStr[16];
-      sprintf(durStr, "%d min (+-0.5)", minDur);
+      if (minDurH >= 24) {
+        sprintf(durStr, "%.1fd (+-0.5)", minDurH / 24.0);
+      } else {
+        sprintf(durStr, "%dh (+-0.5)", minDurH);
+      }
       u8g2.setFont(u8g2_font_4x6_tf);
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 37, durStr);
       break;
@@ -702,11 +774,11 @@ void drawNormalScreens() {
 
     case SCR_MAX_TEMP: {
       float minT, maxT;
-      int minDur, maxDur;
-      get36hMinMax(minT, minDur, maxT, maxDur);
+      int minDurH, maxDurH;
+      get30dMinMax(minT, minDurH, maxT, maxDurH);
 
       u8g2.setFont(u8g2_font_5x7_tf);
-      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, "36h MAXIMUM");
+      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, "30d MAXIMUM");
 
       char tStr[12];
       sprintf(tStr, "%+.1f\xb0", maxT);
@@ -714,7 +786,11 @@ void drawNormalScreens() {
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 27, tStr);
 
       char durStr[16];
-      sprintf(durStr, "%d min (+-0.5)", maxDur);
+      if (maxDurH >= 24) {
+        sprintf(durStr, "%.1fd (+-0.5)", maxDurH / 24.0);
+      } else {
+        sprintf(durStr, "%dh (+-0.5)", maxDurH);
+      }
       u8g2.setFont(u8g2_font_4x6_tf);
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 37, durStr);
       break;
@@ -750,7 +826,18 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  for (int i = 0; i < HISTORY_SIZE; i++) tempHistory[i] = -9999;
+  for (int i = 0; i < HISTORY_SIZE; i++) {
+    tempHistory[i].timestamp = 0;
+    tempHistory[i].temp = -9999;
+  }
+
+  // Initialize LittleFS for persistent 30-day analytics
+  if (!LittleFS.begin(true)) {
+    Serial.println("[LittleFS] Mount Failed!");
+  } else {
+    Serial.println("[LittleFS] Mounted successfully. Loading history...");
+    loadHistoryFromFS();
+  }
 
   pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BOOT_BTN_PIN), isrButtonChange, CHANGE);
@@ -818,15 +905,15 @@ void handleButtonState() {
     unsigned long duration = millis() - localPressStart;
     wasPressed = false;
 
-    // Kısa Basış (50ms - 1500ms): Ekranlar arası anında geçiş & Arka planı durdur
+    // Short Press (50ms - 1500ms): Instant screen switching & pause background scan
     if (sysMode == MODE_NORMAL_RUN && duration < 1500 && duration > 50) {
       isBrowsingScreens = true;
-      stopBLE(); // Ekran gezinmesinde BLE taramasını durdur (donma ve gecikmeyi önle)
+      stopBLE(); // Pause BLE scan while browsing to eliminate lag and flicker
       currentInfoScr = (InfoScreen)((currentInfoScr + 1) % SCR_TOTAL_COUNT);
       lastScreenSwitchTime = millis();
       Serial.printf("[SCREEN] Switched to: %d\n", (int)currentInfoScr);
     }
-    // Menüdeyken kısa basış
+    // Short press while in Menu mode
     else if (sysMode == MODE_MENU && duration < 2000 && duration > 50) {
       menuSelection = (menuSelection + 1) % 3;
       menuLastActionTime = millis();
@@ -840,9 +927,16 @@ void loop() {
   int rawPower = digitalRead(cfgMgr.config.powerDetectPin);
   isPowerOutage = (cfgMgr.config.powerPinActiveLow == 1) ? (rawPower == LOW) : (rawPower == HIGH);
 
-  if (everReceivedAnyData && (millis() - lastHistorySampleTime >= 60000UL)) {
+  // 1) Add sample to RAM buffer every 5 minutes (300,000 ms)
+  if (everReceivedAnyData && (millis() - lastHistorySampleTime >= 300000UL)) {
     lastHistorySampleTime = millis();
     addTempSample(lastDispTemp);
+  }
+
+  // 2) Save RAM buffer to LittleFS Flash every 30 minutes (1,800,000 ms)
+  if (historyCount > 0 && (millis() - lastHistorySaveTime >= 1800000UL)) {
+    lastHistorySaveTime = millis();
+    saveHistoryToFS();
   }
 
   // --- MOD 1: MENU ---
@@ -850,6 +944,7 @@ void loop() {
     drawMenuScreen();
     if (millis() - menuLastActionTime >= 10000) {
       Serial.println("[MENU] Inactivity -> Soft Reset...");
+      if (historyCount > 0) saveHistoryToFS();
       u8g2.clearBuffer();
       u8g2.drawStr(X_OFFSET + 10, Y_OFFSET + 24, "Restarting.");
       u8g2.sendBuffer();
@@ -907,7 +1002,7 @@ void loop() {
   // --- MOD 4: NORMAL / DISCOVERY ---
   drawNormalScreens();
 
-  // KULLANICI EKRANLARDA GEZINIRKEN ARKA PLAN TARAMA VE GONDERIMLERINI DURDUR!
+  // PAUSE BACKGROUND SCANNING AND UPLOADING WHILE USER IS BROWSING SCREENS!
   if (isBrowsingScreens) {
     return;
   }
@@ -981,8 +1076,8 @@ void loop() {
     appState = STATE_WAIT_INTERVAL;
   }
   else if (appState == STATE_WAIT_INTERVAL) {
-    // Non-blocking, kesintisiz bekleme (millis tabanlı)
-    // Buton basışları ve ekran çizimleri loop başında kesintisiz devam eder.
+    // Non-blocking wait (millis-based)
+    // Button handling and OLED rendering continue uninterrupted in loop.
     if (now - waitIntervalStartTime >= bleIntervalMs) {
       appState = STATE_SCAN_BLE;
       stateStageStartTime = millis();

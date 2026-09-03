@@ -7,6 +7,9 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 #include "config_manager.h"
+#include "history_manager.h"
+#include "report_generator.h"
+#include "about_page.h"
 
 extern ConfigManager cfgMgr;
 
@@ -77,6 +80,14 @@ private:
     html += "<div class=\"spinner\"></div>";
     html += "<div style=\"font-size:18px;font-weight:bold;\">🔍 Scanning Thermometers...</div>";
     html += "<div style=\"font-size:13px;margin-top:8px;color:#ddd;\">Please wait (5 seconds)...</div>";
+    html += "<div class=\"card\" style=\"background:#eef7ff;border:1.5px solid #1a73e8;\">";
+    html += "<h2 style=\"color:#1a73e8;border-color:#d2e3fc;\">📊 Cold Chain Analytics & Report Export</h2>";
+    html += "<p style=\"font-size:13px;color:#444;margin-bottom:12px;\">Export official 30-day temperature logs, violation history, and print-ready PDF audit reports.</p>";
+    html += "<div style=\"display:flex;gap:10px;flex-wrap:wrap;\">";
+    html += "  <a href=\"/report\" target=\"_blank\" style=\"flex:1;min-width:130px;background:#1a73e8;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">📄 PDF Audit Report</a>";
+    html += "  <a href=\"/export_csv\" download=\"temperature_history_30d.csv\" style=\"flex:1;min-width:130px;background:#34a853;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">📥 Download CSV</a>";
+    html += "  <a href=\"/about\" style=\"flex:1;min-width:130px;background:#5f6368;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">ℹ️ About & Docs</a>";
+    html += "</div>";
     html += "</div>";
 
     html += "<form id=\"cfg-form\" onsubmit=\"submitForm(event)\">";
@@ -210,6 +221,40 @@ public:
       server.sendHeader("Connection", "close");
       server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       server.send(200, "text/html; charset=utf-8", buildHtml());
+    });
+
+    server.on("/report", HTTP_GET, [this]() {
+      server.sendHeader("Connection", "close");
+      server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      server.send(200, "text/html; charset=utf-8", ReportGenerator::buildPdfReportHtml());
+    });
+
+    server.on("/about", HTTP_GET, [this]() {
+      server.sendHeader("Connection", "close");
+      server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      server.send(200, "text/html; charset=utf-8", AboutPageGenerator::buildAboutHtml());
+    });
+
+    server.on("/export_csv", HTTP_GET, [this]() {
+      server.sendHeader("Content-Disposition", "attachment; filename=\"cold_chain_30d.csv\"");
+      server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+      server.send(200, "text/csv", "Timestamp,DateTime,Temperature_C,Status\r\n");
+
+      for (int i = 0; i < historyCount; i++) {
+        int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
+        if (tempHistory[idx].temp <= -9990) continue;
+
+        float tVal = tempHistory[idx].temp / 10.0f;
+        String line = String(tempHistory[idx].timestamp) + "," +
+                      ReportGenerator::formatTimestamp(tempHistory[idx].timestamp) + "," +
+                      String(tVal, 1) + ",";
+        if (tVal <= 2.0f) line += "FREEZE_VIOLATION\r\n";
+        else if (tVal >= 8.0f) line += "HEAT_VIOLATION\r\n";
+        else line += "NORMAL\r\n";
+
+        server.sendContent(line);
+      }
+      server.sendContent("");
     });
 
     server.on("/clear_ble", HTTP_GET, [this]() {
