@@ -436,65 +436,6 @@ public:
     html += "  </div>";
     html += "</div>";
 
-    html += ".kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }";
-    html += ".kpi { border: 1px solid #dadce0; border-radius: 8px; padding: 12px; text-align: center; }";
-    html += ".kpi.freeze { border-color: #1a73e8; background: #e8f0fe; }";
-    html += ".kpi.heat { border-color: #d93025; background: #fce8e6; }";
-    html += ".kpi.safe { border-color: #34a853; background: #e6f4ea; }";
-    html += ".kpi-val { font-size: 22px; font-weight: bold; margin: 5px 0; }";
-    html += ".kpi-lbl { font-size: 11px; font-weight: bold; text-transform: uppercase; color: #5f6368; }";
-    html += ".kpi-sub { font-size: 11px; color: #70757a; }";
-    html += ".chart-box { border: 1px solid #dadce0; border-radius: 8px; padding: 15px; margin-bottom: 20px; background: #fff; height: 320px; }";
-    html += ".sec-title { font-size: 16px; font-weight: bold; margin: 20px 0 10px 0; color: #202124; border-bottom: 1px solid #dadce0; padding-bottom: 5px; }";
-    html += "table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }";
-    html += "th, td { border: 1px solid #dadce0; padding: 8px 10px; text-align: left; }";
-    html += "th { background: #f1f3f4; font-weight: 600; }";
-    html += ".badge-red { background: #fce8e6; color: #d93025; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
-    html += ".badge-blue { background: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
-    html += ".badge-green { background: #e6f4ea; color: #137333; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
-    html += ".no-print { margin-bottom: 15px; display: flex; gap: 10px; }";
-    html += ".btn { background: #1a73e8; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; text-decoration: none; font-size: 14px; }";
-    html += ".watermark { display: none; }";
-    html += "@media print { body { background: #fff; padding: 0; } .report-container { box-shadow: none; padding: 0; } .no-print { display: none !important; } .watermark { display: block !important; position: fixed; bottom: 8mm; right: 12mm; font-size: 9.5px; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.5px; } }";
-    html += "</style>";
-    html += "</head><body>";
-
-    html += "<div class=\"report-container\">";
-    html += "<div class=\"no-print\">";
-    html += "  <button onclick=\"window.print()\" class=\"btn\">🖨️ Print / Save as PDF</button>";
-    html += "  <a href=\"/verify\" class=\"btn\" style=\"background:#137333;\">🛡️ Verify Certificate</a>";
-    html += "  <a href=\"/\" class=\"btn\" style=\"background:#5f6368;\">⬅️ Back to Portal</a>";
-    html += "</div>";
-
-    html += "<div class=\"header\">";
-    html += "  <div>";
-    html += "    <h1 class=\"title\">❄️ Cold Chain Temperature Audit Report</h1>";
-    html += "    <div class=\"meta\">Target Standard: <strong>+2.0 &deg;C to +8.0 &deg;C</strong> | Rolling Window: <strong>Last 30 Days</strong></div>";
-    html += "  </div>";
-    html += "  <div class=\"meta\" style=\"text-align:right;\">";
-    html += "    <div>Device: <strong>" + cfgMgr.config.bleTargetName + "</strong> (" + cfgMgr.config.bleTargetMac + ")</div>";
-    html += "    <div>Generated: <strong>" + formatTimestamp(genTime) + "</strong></div>";
-    html += "    <div>Total Samples: <strong>" + String(validCount) + " (5 min interval)</strong></div>";
-    html += "  </div>";
-    html += "</div>";
-
-    // Tamper-Proof Cryptographic Seal Card
-    html += "<div class=\"seal-box\">";
-    html += "  <div class=\"seal-info\">";
-    html += "    <div class=\"seal-title\">🛡️ Cryptographic Integrity & Authenticity Seal (Tamper-Proof)</div>";
-    html += "    <div class=\"seal-desc\">Issued by onboard ESP32-C3 hardware security subsystem. Any manual alteration to measurement values, timestamps, or limits invalidates this cryptographic seal.</div>";
-    html += "    <div class=\"seal-grid\">";
-    html += "      <div><strong>Certificate ID:</strong> <span class=\"badge-blue\">" + certId + "</span></div>";
-    html += "      <div><strong>Hardware Identity:</strong> <code>" + WiFi.macAddress() + "</code></div>";
-    html += "      <div style=\"grid-column: span 2;\"><strong>SHA-256 Digest:</strong> <code class=\"hash-code\">" + hashStr + "</code></div>";
-    html += "    </div>";
-    html += "  </div>";
-    html += "  <div class=\"seal-qr\">";
-    html += "    <div id=\"qrcode\"><a href=\"" + verifyUrl + "\" style=\"text-decoration:none;\"><div style=\"width:95px;height:95px;background:#e8f0fe;border:2px dashed #1a73e8;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#1a73e8;font-size:10px;font-weight:bold;padding:4px;box-sizing:border-box;\">🛡️<br>OFFICIAL<br>DIGITAL<br>SEAL</div></a></div>";
-    html += "    <div class=\"qr-sub\"><a href=\"" + verifyUrl + "\" style=\"color:#1a73e8;text-decoration:none;\">Scan to Verify</a></div>";
-    html += "  </div>";
-    html += "</div>";
-
     html += "<div class=\"kpi-grid\">";
     html += "  <div class=\"kpi " + String(minT < 2.0f ? "freeze" : "safe") + "\">";
     html += "    <div class=\"kpi-lbl\">30d Minimum</div>";
