@@ -185,42 +185,182 @@ At any point, access the Web Portal (`192.168.4.1`) or navigate via local networ
 
 ## 📊 Google Sheets Cloud Telemetry Setup
 
-1. Create a new spreadsheet at [sheets.new](https://sheets.new).
-2. Go to **Extensions -> Apps Script**.
-3. Replace any placeholder script with the following code:
+The project includes an intelligent cloud telemetry webhook and watchdog script (`google_sheets_script.js`) featuring:
+- **Automatic Table Initialization:** Creates formatted headers on empty spreadsheets.
+- **Cold Chain Excursion Alerts:** Dispatches immediate email notifications when temperatures fall outside safe bounds.
+- **Mains Power Loss Alerts:** Detects when power detection circuitry flags an outage.
+- **Automated Offline Watchdog:** Runs via a Google Apps Script time-driven trigger; alerts if no data is received within the timeout window.
+- **Connection Recovery Notifications:** Sends an email when the device comes back online after an outage.
+
+### Setup Instructions
+
+1. Create a new Google Spreadsheet at [sheets.new](https://sheets.new).
+2. Open **Extensions -> Apps Script** from the top menu.
+3. Paste the following script (also available in [`google_sheets_script.js`](file:///C:/Users/meteg/.gemini/antigravity/scratch/Cold-Chain-Tracking-System/google_sheets_script.js)):
 
 ```javascript
+// ==========================================
+// --- CONFIGURATION ---
+// ==========================================
+const EMAIL_RECIPIENT = "mete.gokhan@gmail.com"; // Notification recipient email
+const MIN_TEMP_LIMIT = 2.5;                      // Lower safe temperature limit (°C)
+const MAX_TEMP_LIMIT = 7.5;                      // Upper safe temperature limit (°C)
+const OFFLINE_TIMEOUT_MINUTES = 10;              // Inactivity timeout before triggering offline alert
+
 function doGet(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  var params = e.parameter;
-  var date = Utilities.formatDate(new Date(), "GMT+3", "dd.MM.yyyy HH:mm:ss");
-  var device = params.device || "ATC_UNKNOWN";
-  var temp = (params.temp === "-" || isNaN(parseFloat(params.temp))) ? "-" : parseFloat(params.temp);
-  var hum = (params.hum === "-" || isNaN(parseFloat(params.hum))) ? "-" : parseFloat(params.hum);
-  var bat = (params.bat === "-" || isNaN(parseInt(params.bat))) ? "-" : parseInt(params.bat);
-  var volt = (params.volt === "-" || isNaN(parseFloat(params.volt))) ? "-" : parseFloat(params.volt);
-  var rssi = params.rssi || "-";
-  var pwr = params.pwr || "ONLINE";
-  var note = params.note || "Normal";
+  return handleData(e);
+}
 
-  // Append new telemetry entry
-  sheet.appendRow([date, device, temp, hum, bat, volt, rssi, pwr, note]);
+function doPost(e) {
+  return handleData(e);
+}
 
-  // Optional: Trigger urgent email alert on limit breach
-  if (temp !== "-" && (temp < 2.0 || temp > 8.0)) {
-    MailApp.sendEmail(Session.getActiveUser().getEmail(), 
-                      "🚨 Cold Chain Alert: " + device, 
-                      "Temperature excursion detected!\nCurrent Temperature: " + temp + " °C\nMains Power: " + pwr);
+function ensureHeaders(sheet) {
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow([
+      "Date & Time",
+      "Device Name",
+      "Temp (°C)",
+      "Humidity (%)",
+      "Battery (%)",
+      "Voltage (V)",
+      "RSSI (dBm)",
+      "Power Status",
+      "Event Note"
+    ]);
+    sheet.getRange(1, 1, 1, 9).setFontWeight("bold").setBackground("#e8f0fe");
   }
-  return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+}
+
+function handleData(e) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    ensureHeaders(sheet);
+
+    const params = (e && e.parameter) ? e.parameter : {};
+    const now = new Date();
+    const dateFormatted = Utilities.formatDate(now, "GMT+3", "dd.MM.yyyy HH:mm:ss");
+
+    const device = params.device || "ATC_UNKNOWN";
+    const temp = (params.temp === "-" || isNaN(parseFloat(params.temp))) ? "-" : parseFloat(params.temp);
+    const hum = (params.hum === "-" || isNaN(parseFloat(params.hum))) ? "-" : parseFloat(params.hum);
+    const bat = (params.bat === "-" || isNaN(parseInt(params.bat))) ? "-" : parseInt(params.bat);
+    const volt = (params.volt === "-" || isNaN(parseFloat(params.volt))) ? "-" : parseFloat(params.volt);
+    const rssi = params.rssi || "-";
+    const pwr = params.pwr || "ONLINE";
+    let note = params.note || "Normal";
+
+    // 1. Temperature Excursion Check
+    if (temp !== "-") {
+      if (temp < MIN_TEMP_LIMIT || temp > MAX_TEMP_LIMIT) {
+        note = "LIMIT BREACH!";
+        sendAlertEmail(
+          `⚠️ TEMPERATURE ALERT: ${device}`,
+          `Attention!\n\n` +
+          `Temperature reading from ${device} breached defined safety thresholds:\n\n` +
+          `• Temperature: ${temp} °C (Allowed: ${MIN_TEMP_LIMIT}°C - ${MAX_TEMP_LIMIT}°C)\n` +
+          `• Humidity: %${hum} RH\n` +
+          `• Power State: ${pwr}\n` +
+          `• Battery: %${bat} (${volt}V)\n` +
+          `• Signal (RSSI): ${rssi} dBm\n` +
+          `• Timestamp: ${dateFormatted}\n\n` +
+          `Please inspect cold-room storage immediately.`
+        );
+      }
+    }
+
+    // 2. Mains Power Disconnection Check
+    if (pwr === "OUTAGE") {
+      note = (note === "Normal") ? "POWER OUTAGE" : note + " & POWER OUTAGE";
+      sendAlertEmail(
+        `🚨 MAINS POWER OUTAGE: ${device}`,
+        `CRITICAL ALERT!\n\n` +
+        `Mains electricity disconnection detected for ${device}.\n` +
+        `System is currently operating on battery power.\n\n` +
+        `• Current Temp: ${temp} °C\n` +
+        `• Battery: %${bat} (${volt}V)\n` +
+        `• Timestamp: ${dateFormatted}`
+      );
+    }
+
+    // 3. Append Data Row
+    sheet.appendRow([dateFormatted, device, temp, hum, bat, volt, rssi, pwr, note]);
+
+    // 4. Connection Restored Check
+    const wasOffline = PropertiesService.getScriptProperties().getProperty("OFFLINE_ALERTED");
+    if (wasOffline === "true") {
+      sendAlertEmail(
+        `✅ CONNECTION RESTORED: ${device}`,
+        `Notice:\n\n` +
+        `Data transmission has resumed normally for ${device}.\n\n` +
+        `• Current Temp: ${temp} °C\n` +
+        `• Power State: ${pwr}\n` +
+        `• Resumed at: ${dateFormatted}`
+      );
+    }
+
+    // Update heartbeat tracking
+    PropertiesService.getScriptProperties().setProperty("LAST_SEEN", now.getTime().toString());
+    PropertiesService.getScriptProperties().setProperty("OFFLINE_ALERTED", "false");
+
+    return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+  } catch (error) {
+    return ContentService.createTextOutput("ERROR: " + error.toString()).setMimeType(ContentService.MimeType.TEXT);
+  }
+}
+
+// Time-Driven Watchdog Trigger
+function checkDeviceOffline() {
+  const lastSeenStr = PropertiesService.getScriptProperties().getProperty("LAST_SEEN");
+  const offlineAlerted = PropertiesService.getScriptProperties().getProperty("OFFLINE_ALERTED");
+
+  if (!lastSeenStr) return;
+
+  const lastSeenTime = parseInt(lastSeenStr);
+  const now = new Date().getTime();
+  const diffMinutes = (now - lastSeenTime) / (1000 * 60);
+
+  if (diffMinutes >= OFFLINE_TIMEOUT_MINUTES && offlineAlerted !== "true") {
+    sendAlertEmail(
+      `🚨 DEVICE OFFLINE / TELEMETRY LOSS!`,
+      `WARNING: No telemetry received from ESP32 / BLE sensor for ${Math.round(diffMinutes)} minutes!\n\n` +
+      `Possible root causes:\n` +
+      `- Mains power outage or battery drained\n` +
+      `- Wi-Fi router disconnection or internet loss\n` +
+      `- BLE thermometer battery (CR2032) exhausted\n\n` +
+      `Please check the cold chain storage unit immediately.`
+    );
+    PropertiesService.getScriptProperties().setProperty("OFFLINE_ALERTED", "true");
+  }
+}
+
+function sendAlertEmail(subject, body) {
+  try {
+    MailApp.sendEmail(EMAIL_RECIPIENT, subject, body);
+  } catch (e) {
+    console.error("Failed to send alert email: " + e.toString());
+  }
 }
 ```
 
-4. Click **Deploy -> New Deployment**.
-5. Select **Web App**:
+### 4. Deploy as Web App
+1. Click **Deploy -> New Deployment**.
+2. Select type **Web App**:
    - **Execute as:** `Me`
    - **Who has access:** `Anyone`
-6. Copy the generated **Web App URL** and paste it into the Thermo_Obs Web Portal under section 6.
+3. Click **Deploy**, authorize permissions, and copy the generated **Web App URL**.
+4. Paste the URL into section 6 of the Thermo_Obs Web Portal.
+
+### 5. Setup Automated Offline Watchdog Trigger
+To enable automated connection loss detection:
+1. In the Apps Script editor, click the clock icon (**Triggers**) on the left sidebar.
+2. Click **+ Add Trigger** (bottom right) and configure:
+   - **Choose which function to run:** `checkDeviceOffline`
+   - **Choose which deployment should run:** `Head`
+   - **Select event source:** `Time-driven`
+   - **Select type of time based trigger:** `Minutes timer`
+   - **Select minute interval:** `Every 5 minutes` (or `Every 10 minutes`)
+3. Click **Save**.
 
 ---
 
