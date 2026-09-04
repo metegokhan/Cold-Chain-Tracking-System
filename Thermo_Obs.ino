@@ -267,6 +267,7 @@ void drawNormalScreens();
 void handleButtonState();
 bool checkMenuAbort();
 void stopBLE();
+void stopBLEAndFreeMem();
 void startBLEScanForMode();
 
 String urlEncode(String str) {
@@ -420,17 +421,21 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     }
 };
 
+static MyAdvertisedDeviceCallbacks s_bleCallbacks;
+
 void startBLEScanForMode() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
 
   if (pBLEScan == nullptr) {
+    Serial.printf("[BLE] Initializing BLE stack (Free Heap before BLE: %u bytes)...\n", ESP.getFreeHeap());
     BLEDevice::init("");
     pBLEScan = BLEDevice::getScan();
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks(), true);
+    pBLEScan->setAdvertisedDeviceCallbacks(&s_bleCallbacks, true);
     pBLEScan->setActiveScan(true);
     pBLEScan->setInterval(100);
     pBLEScan->setWindow(99);
+    Serial.printf("[BLE] BLE scan active (Free Heap: %u bytes, MaxAlloc: %u bytes)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   }
 }
 
@@ -439,6 +444,15 @@ void stopBLE() {
     pBLEScan->stop();
     pBLEScan->clearResults();
   }
+}
+
+void stopBLEAndFreeMem() {
+  stopBLE();
+  Serial.printf("[BLE] Releasing BLE stack to free RAM for Wi-Fi/HTTPS (Free Heap before deinit: %u bytes)...\n", ESP.getFreeHeap());
+  BLEDevice::deinit(false); // false = do NOT release controller ROM, permits reinit via BLEDevice::init("")
+  pBLEScan = nullptr;
+  Serial.printf("[BLE] ✅ BLE stack released (Free Heap now: %u bytes, MaxAlloc: %u bytes)\n",
+                ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -664,11 +678,11 @@ void executeSendCycle() {
                 measuredTemp, measuredHum, measuredBattery, measuredVoltage, measuredRssi);
   Serial.printf("[CYCLE] Fresh BLE Data: %s | Power: %s\n",
                 hasFreshData ? "YES" : "NO", isPowerOutage ? "OUTAGE (Battery)" : "ONLINE (Mains)");
-  Serial.printf("[CYCLE] Free Heap before stopping BLE: %u bytes\n", ESP.getFreeHeap());
+  Serial.printf("[CYCLE] Free Heap before stopping BLE: %u bytes, MaxAlloc: %u bytes\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-  stopBLE();
+  stopBLEAndFreeMem();
   delay(50);
-  Serial.printf("[CYCLE] Free Heap after stopping BLE: %u bytes\n", ESP.getFreeHeap());
+  Serial.printf("[CYCLE] Free Heap after stopping BLE: %u bytes, MaxAlloc: %u bytes\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   WiFi.mode(WIFI_STA);
 
@@ -713,8 +727,8 @@ void executeSendCycle() {
       }
 
       Serial.printf("[Sheets] 🔗 URL: %s\n", url.c_str());
-      Serial.printf("[Sheets] 📡 Connecting via HTTPS... (Free Heap: %u bytes, Min Ever: %u bytes)\n",
-                    ESP.getFreeHeap(), ESP.getMinFreeHeap());
+      Serial.printf("[Sheets] 📡 Connecting via HTTPS... (Free Heap: %u bytes, Max Alloc: %u bytes, Min Ever: %u bytes)\n",
+                    ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap());
 
       if (https.begin(client, url)) {
         https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -1316,6 +1330,9 @@ void loop() {
   unsigned long bleIntervalMs = (unsigned long)cfgMgr.config.bleReadIntervalSec * 1000UL;
 
   if (appState == STATE_SCAN_BLE) {
+    if (pBLEScan == nullptr) {
+      startBLEScanForMode();
+    }
     pBLEScan->start(1, false);
     pBLEScan->clearResults();
 
