@@ -594,8 +594,13 @@ bool connectToAvailableWiFi() {
 
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
+      // Inject Google 8.8.8.8 and Cloudflare 1.1.1.1 DNS servers to avoid router DNS lockups
+      IPAddress dns1(8, 8, 8, 8);
+      IPAddress dns2(1, 1, 1, 1);
+      WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(), dns1, dns2);
+
       Serial.printf("[WIFI] ✅ Connected to Primary SSID: '%s'\n", cfgMgr.config.wifiSsid.c_str());
-      Serial.printf("[WIFI] 📍 IP: %s | Gateway: %s | RSSI: %d dBm\n",
+      Serial.printf("[WIFI] 📍 IP: %s | Gateway: %s | DNS: 8.8.8.8 | RSSI: %d dBm\n",
                     WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
       Serial.println("[WIFI] ==========================================================\n");
       if (!isTimeSynced || (millis() - lastNtpSyncTime >= 86400000UL)) syncNtpTime();
@@ -630,8 +635,12 @@ bool connectToAvailableWiFi() {
 
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
+      IPAddress dns1(8, 8, 8, 8);
+      IPAddress dns2(1, 1, 1, 1);
+      WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(), dns1, dns2);
+
       Serial.printf("[WIFI] ✅ Connected to Backup SSID: '%s'\n", cfgMgr.config.backupWifiSsid.c_str());
-      Serial.printf("[WIFI] 📍 IP: %s | Gateway: %s | RSSI: %d dBm\n",
+      Serial.printf("[WIFI] 📍 IP: %s | Gateway: %s | DNS: 8.8.8.8 | RSSI: %d dBm\n",
                     WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
       Serial.println("[WIFI] ==========================================================\n");
       if (!isTimeSynced || (millis() - lastNtpSyncTime >= 86400000UL)) syncNtpTime();
@@ -675,8 +684,17 @@ void executeSendCycle() {
     Serial.println("\n--- [ 1. Google Sheets Transmission ] ---");
     if (cfgMgr.config.googleScriptUrl.length() > 0 && cfgMgr.config.googleScriptUrl.indexOf("YOUR_SCRIPT_ID") == -1) {
       Serial.println("[Sheets] 🌐 Preparing Google Apps Script request...");
+
+      // Explicit DNS Resolution Verification
+      IPAddress scriptIp;
+      bool dnsSuccess = WiFi.hostByName("script.google.com", scriptIp);
+      Serial.printf("[DNS] Resolving 'script.google.com' -> %s (Success: %s)\n",
+                    dnsSuccess ? scriptIp.toString().c_str() : "0.0.0.0",
+                    dnsSuccess ? "YES" : "FAILED");
+
       NetworkClientSecure client;
       client.setInsecure();
+      client.setHandshakeTimeout(15);
       HTTPClient https;
 
       String dName = (cfgMgr.config.bleTargetName.length() > 0) ? cfgMgr.config.bleTargetName : measuredDeviceName;
@@ -695,11 +713,12 @@ void executeSendCycle() {
       }
 
       Serial.printf("[Sheets] 🔗 URL: %s\n", url.c_str());
-      Serial.printf("[Sheets] 📡 Connecting via HTTPS... (Free Heap: %u bytes)\n", ESP.getFreeHeap());
+      Serial.printf("[Sheets] 📡 Connecting via HTTPS... (Free Heap: %u bytes, Min Ever: %u bytes)\n",
+                    ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
       if (https.begin(client, url)) {
         https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-        https.setTimeout(12000); // 12 seconds for Google script execution
+        https.setTimeout(15000); // 15 seconds for serverless Google Apps Script execution and redirects
         unsigned long httpStart = millis();
         int code = https.GET();
         unsigned long httpDur = millis() - httpStart;
@@ -715,9 +734,14 @@ void executeSendCycle() {
                           preview.c_str(), respBody.length() > 200 ? "..." : "");
           }
         } else {
+          char errBuf[128] = {0};
+          client.lastError(errBuf, sizeof(errBuf));
           Serial.printf("[Sheets] ❌ HTTP GET Failed! Error: %s (Code: %d, took %lu ms)\n",
                         https.errorToString(code).c_str(), code, httpDur);
-          Serial.println("[Sheets] 💡 Note: Code -1 = DNS/Connection Refused, -11 = Read Timeout.");
+          if (strlen(errBuf) > 0) {
+            Serial.printf("[Sheets] 🔍 TLS Client Diagnostic: %s\n", errBuf);
+          }
+          Serial.println("[Sheets] 💡 Note: Code -1 = DNS / SSL handshake failure, -11 = Read Timeout.");
         }
         https.end();
       } else {

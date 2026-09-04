@@ -1,12 +1,14 @@
 #pragma once
 #include <Arduino.h>
 
-struct TempRecord {
+struct __attribute__((packed)) TempRecord {
   uint32_t timestamp; // Unix epoch seconds (NTP time)
   int16_t temp;       // Temperature * 10 (e.g. 4.5 C -> 45)
 };
 
-const int HISTORY_SIZE = 8640; // 30 days * 24 hours * 12 samples/hour (every 5 mins)
+// Rolling buffer sized for ESP32-C3 internal SRAM constraints (2880 samples = 10 full days @ 5-min intervals)
+// Saves ~52 KB of critical SRAM to allow TLS/HTTPS (mbedTLS) to operate without memory exhaustion.
+const int HISTORY_SIZE = 2880; 
 extern TempRecord tempHistory[HISTORY_SIZE];
 extern int historyHead;
 extern int historyCount;
