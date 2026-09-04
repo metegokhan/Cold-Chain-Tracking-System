@@ -164,9 +164,126 @@ Interactive Configuration Menu (Hold BOOT for 5 seconds):
 | **OLED Display** | 0.42" SSD1306 Monochrome I2C (72x40 active window) | `SCL: GPIO 6` , `SDA: GPIO 5` |
 | **Control Button** | On-board `BOOT` push-button | `GPIO 9` (Internal Pull-Up, Active LOW) |
 | **Wireless Sensor** | Xiaomi Mijia Bluetooth Thermometer 2 (**LYWSD03MMC**) | BLE 5.0 (BTHome V2 / ATC Beacon) |
-| **Power Outage Sensor**| 5V USB sensing circuit / Optocoupler *(Optional)* | `GPIO 4` (NVS-configurable Active Low/High) |
+| **Power Outage Sensor**| 5V USB sensing circuit / Voltage Divider *(See [Circuit Details](#-mains-power-outage-detection-circuit--modem-ups-architecture))* | `GPIO 4` (NVS-configurable Active Low/High) |
 
 > 📌 **Board Pinout & Specs Reference:** [Codey Online - ESP32-C3 OLED 0.42" Pinout & Specs](https://codey.online/boards/esp32-c3-oled)
+
+---
+
+## ⚡ Mains Power Outage Detection Circuit & Modem UPS Architecture
+
+Thermo_Obs features an independent, real-time **Mains Electricity Outage Detection Subsystem** tied to **GPIO 4**. This allows the device to distinguish between normal operations, battery-backed states, and grid blackouts—dispatching emergency alerts via Telegram, Webhooks, and Google Sheets the instant power is cut.
+
+---
+
+### 1. Operation Principle & Dual-Power Design
+
+For the power outage detection subsystem to function correctly, the installation must follow a **Dual-Power topology**:
+1. **ESP32-C3 Backup Power:** The ESP32-C3 board is powered continuously via a battery backup solution (e.g., a 3.7V Li-ion/Li-Po cell with charging module, an 18650 UPS shield, or an uninterruptible USB power bank with pass-through charging).
+2. **Mains Electricity Sense Line (5V DC):** A secondary 5V USB wall adapter is plugged directly into the unbacked wall socket (representing raw grid power).
+3. **Firmware Detection Logic (`GPIO 4`):**
+   - **Grid Power Normal (ONLINE):** The 5V sense line is live. The voltage divider outputs $\approx 3.3\text{V}$ (Logic HIGH) to GPIO 4.
+   - **Grid Blackout (OUTAGE):** The 5V sense line collapses to $0\text{V}$. The pull-down resistor pulls GPIO 4 firmly to GND ($0\text{V}$, Logic LOW).
+   - In firmware (`Thermo_Obs.ino`), with default setting `powerPinActiveLow = 1`:
+     - `GPIO 4 == LOW (0V)` $\rightarrow$ `isPowerOutage = true` (Dispatches `⚡ MAINS POWER OUTAGE DETECTED!`)
+     - `GPIO 4 == HIGH (3.3V)` $\rightarrow$ `isPowerOutage = false` (Dispatches `🔌 MAINS POWER RESTORED!`)
+
+---
+
+### 2. Voltage Divider Resistor Calculation
+
+> [!CAUTION]
+> **ESP32-C3 GPIO pins are strictly NOT 5V tolerant!**
+> Applying 5V directly to GPIO 4 will permanently destroy the microcontroller pin. You **must** use a voltage divider or optocoupler circuit to step 5V down to safe 3.3V logic levels.
+
+The voltage divider uses two standard resistors ($R_1$ and $R_2$):
+$$V_{\text{out (GPIO 4)}} = V_{\text{in (5V)}} \times \frac{R_2}{R_1 + R_2}$$
+
+| Resistor | Recommended Value | Alternative Value | Function |
+| :--- | :---: | :---: | :--- |
+| **$R_1$ (Upper Resistor)** | **$10\text{ k}\Omega$** (1/4W) | $4.7\text{ k}\Omega$ | Drops 5V to safe 3.3V logic level |
+| **$R_2$ (Lower Resistor / Pull-down)** | **$20\text{ k}\Omega$** (1/4W) | $22\text{ k}\Omega$ or $10\text{ k}\Omega$ | Bridges GPIO 4 to GND; pulls pin to 0V when 5V collapses |
+| **$C_1$ (Filter Capacitor - Optional)** | **$100\text{ nF}$** (0.1µF Ceramic) | $10\text{ nF}$ | Paralleled with $R_2$ to eliminate mains line transients / EMI spikes |
+
+**Calculation:**
+$$V_{\text{out}} = 5.0\text{V} \times \frac{20\text{ k}\Omega}{10\text{ k}\Omega + 20\text{ k}\Omega} = 5.0\text{V} \times \frac{2}{3} \approx 3.33\text{V} \quad (\text{Safe & optimal logic HIGH for ESP32})$$
+*(If using standard $22\text{ k}\Omega$: $5.0\text{V} \times \frac{22}{32} = 3.43\text{V}$, safely within the 3.6V maximum limit).*
+
+---
+
+### 3. Wiring Schematics
+
+#### Option A: Resistor Bridge / Voltage Divider (Simplest & Most Cost-Effective)
+
+```text
+  [ Mains 5V USB Adapter ]
+         (+) 5V DC ───────────────────[ R1: 10 kΩ ]────────────────┬──────────► ESP32-C3 GPIO 4
+                                                                   │
+                                                            [ R2: 20 kΩ or 22 kΩ ]
+                                                                   │
+                                                            [ C1: 100 nF (Opt) ]
+                                                                   │
+         (-) GND ──────────────────────────────────────────────────┴──────────► ESP32-C3 GND
+```
+
+#### Option B: Galvanically Isolated Optocoupler Circuit (Industrial Grade)
+
+For noisy industrial environments, an optocoupler (e.g. **PC817**) provides 100% electrical galvanic isolation:
+
+```text
+  [ Mains 5V DC ] ────[ R_limit: 1 kΩ ]────► (Pin 1: Anode)   PC817   (Pin 4: Collector) ────► ESP32-C3 GPIO 4
+                                                                      (Pin 3: Emitter)   ────► ESP32-C3 GND
+  [ Mains GND   ] ─────────────────────────► (Pin 2: Cathode)
+  
+  * Note: Use ESP32 internal pull-up on GPIO 4 (pinMode(4, INPUT_PULLUP)).
+```
+
+---
+
+### 4. ⚠️ CRITICAL: Wi-Fi Modem / Router UPS Requirement
+
+> [!IMPORTANT]
+> **Why the Internet Router MUST be connected to an Uninterruptible Power Supply (UPS):**
+> 
+> - While the **ESP32-C3** runs on its local battery/power bank and the **BLE thermometer** runs on its internal CR2032 coin cell, **the Wi-Fi router / fiber GPON modem will die immediately during a blackout if plugged into raw wall power.**
+> - If the modem shuts down:
+>   - The Wi-Fi radio disappears.
+>   - The ESP32-C3 detects the outage on GPIO 4 within milliseconds, but **cannot access the internet to dispatch the Telegram message or Google Sheets entry**.
+> 
+> **Required Topology:**
+> Connect your home/office Wi-Fi router and fiber converter (ONT) to a **12V Mini DC-UPS**, battery backup adapter, or central computer UPS.
+> 
+> ```mermaid
+> graph LR
+>     subgraph MainsPower ["⚡ Mains AC 220V Grid"]
+>         Mains["Wall AC Socket"]
+>     end
+> 
+>     subgraph RouterPower ["🌐 Wi-Fi Router Subsystem"]
+>         Mains -->|AC| RouterUPS["12V Mini DC-UPS / Backup Battery"]
+>         RouterUPS -->|12V DC| Router["Wi-Fi Router / Fiber GPON<br/>(STAYS ALIVE DURING BLACKOUT)"]
+>     end
+> 
+>     subgraph DevicePower ["❄️ Cold Chain Monitor Subsystem"]
+>         Mains -->|5V USB Sense| Bridge["10k / 20k Resistor Divider"]
+>         Bridge -->|0V to 3.3V Logic| GPIO4["GPIO 4 (Power Detect Pin)"]
+>         Battery["ESP32-C3 UPS Shield / Battery"] -->|Continuous 3.3V/5V| ESP32["ESP32-C3 Board"]
+>         GPIO4 --> ESP32
+>     end
+> 
+>     ESP32 -.->|Instant Wi-Fi Connection| Router
+>     Router -->|Internet Uplink| Cloud["Telegram Bot & Google Sheets Cloud<br/>🚨 Instant Outage Alert Dispatched!"]
+> ```
+
+---
+
+### 5. What Happens if the Router Does NOT Have a UPS? (Fail-Safe Behavior)
+
+If your Wi-Fi router loses power along with the grid:
+1. **Local Wear-Leveled Logging Continues:** The ESP32-C3 continues recording temperature every 5 minutes directly into LittleFS flash memory on battery power. Zero cold-chain telemetry is lost.
+2. **Automated Cloud Watchdog Trigger:** The Google Apps Script time-driven watchdog (`checkDeviceOffline()`) detects that no telemetry heartbeats arrived for $\ge 10$ minutes and sends an emergency email to the administrator:
+   `🚨 DEVICE OFFLINE / TELEMETRY LOSS! No telemetry received for 10 minutes (possible power outage or Wi-Fi loss)`.
+3. **Automatic Recovery on Power Restoration:** When grid power returns, the router reboots, GPIO 4 returns to HIGH, the ESP32 reconnects, flushes all stored flash logs, and dispatches `🔌 MAINS POWER RESTORED!` with connection recovery notices.
 
 ---
 
