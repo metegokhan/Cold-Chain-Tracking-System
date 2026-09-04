@@ -1171,15 +1171,17 @@ void drawPortalScreen() {
 
   u8g2.setFont(u8g2_font_5x7_tf);
   int stations = WiFi.softAPgetStationNum();
+  char buf[32];
   if (stations > 0) {
-    char buf[24];
-    snprintf(buf, sizeof(buf), "Clients: %d", stations);
-    int w3 = u8g2.getStrWidth(buf);
-    u8g2.drawStr(X_OFFSET + (SCREEN_W - w3) / 2, Y_OFFSET + 35, buf);
+    snprintf(buf, sizeof(buf), "1 Client Connected");
   } else {
-    int w3 = u8g2.getStrWidth("192.168.4.1");
-    u8g2.drawStr(X_OFFSET + (SCREEN_W - w3) / 2, Y_OFFSET + 35, "192.168.4.1");
+    unsigned long elapsedSec = (millis() - portal.getApStartTime()) / 1000UL;
+    long remSec = 600 - elapsedSec;
+    if (remSec < 0) remSec = 0;
+    snprintf(buf, sizeof(buf), "192.168.4.1 (%dm%02ds)", (int)(remSec / 60), (int)(remSec % 60));
   }
+  int w3 = u8g2.getStrWidth(buf);
+  u8g2.drawStr(X_OFFSET + (SCREEN_W - w3) / 2, Y_OFFSET + 35, buf);
 
   u8g2.sendBuffer();
 }
@@ -1196,7 +1198,6 @@ void handleButtonState() {
   }
   else if (pressed && wasPressed) {
     unsigned long duration = millis() - localPressStart;
-
     if (sysMode == MODE_NORMAL_RUN && duration >= 5000) {
       sysMode = MODE_MENU;
       menuSelection = 0;
@@ -1212,9 +1213,7 @@ void handleButtonState() {
         startWPSProcess();
       } else if (menuSelection == 1) {
         sysMode = MODE_WIFI_PORTAL;
-        stopBLE();
-        BLEDevice::deinit(true); // Releases ~120KB of Bluedroid RAM for Wi-Fi AP & WebServer!
-        pBLEScan = nullptr;
+        stopBLEAndFreeMem();
         portal.start();
         drawPortalScreen();
       } else if (menuSelection == 2) {

@@ -12,6 +12,8 @@
 #include "about_page.h"
 
 extern ConfigManager cfgMgr;
+extern void stopBLEAndFreeMem();
+extern void saveHistoryToFS();
 
 struct DiscoveredBLEDevice {
   String mac;
@@ -30,6 +32,13 @@ private:
   WebServer server;
   DNSServer dnsServer;
   bool isRunning = false;
+  unsigned long apStartTime = 0;
+  bool clientHasConnected = false;
+  bool shouldRestartOnDisconnect = false;
+  unsigned long disconnectTriggerTime = 0;
+
+public:
+  unsigned long getApStartTime() const { return apStartTime; }
 
   String buildHtml() {
     String html = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">";
@@ -259,20 +268,28 @@ public:
 
   void start() {
     Serial.println("[PORTAL] Initializing SoftAP mode...");
+    stopBLEAndFreeMem();
     WiFi.disconnect(true);
     delay(100);
     WiFi.mode(WIFI_AP);
     delay(50);
     WiFi.setSleep(false); // Keep Wi-Fi radio fully active for reliable phone association
 
+    apStartTime = millis();
+    clientHasConnected = false;
+    shouldRestartOnDisconnect = false;
+    disconnectTriggerTime = 0;
+
     IPAddress local_ip(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_ip, gateway, subnet);
 
-    bool apOk = WiFi.softAP("Thermo_Obs", cfgMgr.config.apPassword.c_str(), 1, 0, 4);
+    // En fazla 1 cihaz bağlanabilsin (max_connection = 1)
+    bool apOk = WiFi.softAP("Thermo_Obs", cfgMgr.config.apPassword.c_str(), 1, 0, 1);
     if (apOk) {
-      Serial.printf("[PORTAL] AP Started: Thermo_Obs | Password: %s | IP: 192.168.4.1\n", cfgMgr.config.apPassword.c_str());
+      Serial.printf("[PORTAL] AP Started: Thermo_Obs | Password: %s | IP: 192.168.4.1 | Max Clients: 1 | Max Lifetime: 10m\n",
+                    cfgMgr.config.apPassword.c_str());
     } else {
       Serial.println("[PORTAL] ❌ WiFi.softAP() FAILED to start!");
     }
@@ -280,10 +297,12 @@ public:
     dnsServer.start(53, "*", local_ip);
 
     // Diagnostics for phone connection tracking
-    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
       if (event == ARDUINO_EVENT_WIFI_AP_START) {
-        Serial.println("[AP] SoftAP Started.");
+        Serial.println("[AP] SoftAP Started (Single-client limit: 1).");
       } else if (event == ARDUINO_EVENT_WIFI_AP_STACONNECTED) {
+        clientHasConnected = true;
+        shouldRestartOnDisconnect = false;
         Serial.printf("[AP] 📱 Phone Associated! MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
                       info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
                       info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
@@ -292,6 +311,11 @@ public:
         Serial.printf("[AP] 🌐 Phone assigned IP: %s\n", IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
       } else if (event == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED) {
         Serial.println("[AP] 📴 Phone Disconnected.");
+        if (clientHasConnected) {
+          shouldRestartOnDisconnect = true;
+          disconnectTriggerTime = millis();
+          Serial.println("[AP] ⏳ Disconnection detected -> Arming soft reset in 1.5s (will not hang in AP mode)...");
+        }
       }
     });
 
@@ -338,6 +362,7 @@ public:
     });
 
     server.on("/report", HTTP_GET, [this]() {
+      stopBLEAndFreeMem();
       String range = server.hasArg("range") ? server.arg("range") : "24h";
       Serial.printf("[PORTAL] Serving /report (range=%s)...\n", range.c_str());
       server.sendHeader("Connection", "close");
@@ -352,6 +377,7 @@ public:
     });
 
     server.on("/verify", HTTP_GET, [this]() {
+      stopBLEAndFreeMem();
       String qCert = server.hasArg("cert") ? server.arg("cert") : "";
       String qHash = server.hasArg("hash") ? server.arg("hash") : "";
       String qRange = server.hasArg("range") ? server.arg("range") : "24h";
@@ -361,6 +387,7 @@ public:
     });
 
     server.on("/export_csv", HTTP_GET, [this]() {
+      stopBLEAndFreeMem();
       String range = server.hasArg("range") ? server.arg("range") : "24h";
       const RangeConfig* cfg = ReportGenerator::getRangeConfig(range);
       server.sendHeader("Content-Disposition", "attachment; filename=\"cold_chain_" + String(cfg->key) + ".csv\"");
@@ -564,6 +591,39 @@ public:
     if (isRunning) {
       dnsServer.processNextRequest();
       server.handleClient();
+
+      unsigned long now = millis();
+      int curStations = WiFi.softAPgetStationNum();
+
+      if (curStations > 0) {
+        clientHasConnected = true;
+        shouldRestartOnDisconnect = false;
+      } else if (clientHasConnected && curStations == 0 && !shouldRestartOnDisconnect) {
+        shouldRestartOnDisconnect = true;
+        disconnectTriggerTime = now;
+        Serial.println("[PORTAL] 📴 Station count dropped to 0 after connection -> Arming soft reset in 1.5s...");
+      }
+
+      // 1. Cihaz bağlantısı kesildiği an cihaz soft reset ile başlasın (WiFi AP modunda kalmasın)
+      if (shouldRestartOnDisconnect && (now - disconnectTriggerTime >= 1500)) {
+        if (WiFi.softAPgetStationNum() == 0) {
+          Serial.println("[PORTAL] 🔄 Client disconnected from AP -> Executing Soft Reset (returning to normal monitoring mode)!");
+          if (historyCount > 0) saveHistoryToFS();
+          delay(300);
+          ESP.restart();
+        } else {
+          shouldRestartOnDisconnect = false;
+        }
+      }
+
+      // 2. WiFi AP modu en fazla 10 dakika (600 saniye) açık kalsın
+      const unsigned long AP_MAX_LIFETIME_MS = 600000UL; // 10 minutes
+      if (now - apStartTime >= AP_MAX_LIFETIME_MS) {
+        Serial.println("[PORTAL] ⏱️ 10-Minute AP Lifetime Timeout reached! Performing soft reset to return to normal mode...");
+        if (historyCount > 0) saveHistoryToFS();
+        delay(300);
+        ESP.restart();
+      }
     }
   }
 };
