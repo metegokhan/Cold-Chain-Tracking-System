@@ -6,9 +6,9 @@ struct __attribute__((packed)) TempRecord {
   int16_t temp;       // Temperature * 10 (e.g. 4.5 C -> 45)
 };
 
-// Rolling buffer sized for ESP32-C3 internal SRAM constraints (2880 samples = 10 full days @ 5-min intervals)
-// Saves ~52 KB of critical SRAM to allow TLS/HTTPS (mbedTLS) to operate without memory exhaustion.
-const int HISTORY_SIZE = 2880; 
+// Rolling buffer sized for 4 full weeks (28 days @ 5-min intervals = 8,064 samples)
+// Packed TempRecord uses only 6 bytes per sample (48.3 KB total SRAM).
+const int HISTORY_SIZE = 8064; 
 extern TempRecord tempHistory[HISTORY_SIZE];
 extern int historyHead;
 extern int historyCount;

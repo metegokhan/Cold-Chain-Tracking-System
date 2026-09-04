@@ -11,8 +11,35 @@
 
 extern ConfigManager cfgMgr;
 
+struct RangeConfig {
+  const char* key;
+  const char* label;
+  const char* displayFreqText;
+  uint32_t durationSec;
+  int maxSamples;
+  int displayStep;
+};
+
 class ReportGenerator {
 public:
+  static const RangeConfig* getRangeConfig(const String& key) {
+    static const RangeConfig configs[] = {
+      {"6h",  "Last 6 Hours",           "15 Minutes", 21600UL,   72,   3},
+      {"12h", "Last 12 Hours",          "15 Minutes", 43200UL,  144,   3},
+      {"24h", "Last 24 Hours",          "30 Minutes", 86400UL,  288,   6},
+      {"36h", "Last 36 Hours",          "30 Minutes", 129600UL, 432,   6},
+      {"1w",  "Last 1 Week (7 Days)",   "1 Hour",     604800UL, 2016, 12},
+      {"2w",  "Last 2 Weeks (14 Days)", "2 Hours",   1209600UL, 4032, 24},
+      {"4w",  "Last 4 Weeks (28 Days)", "4 Hours",   2419200UL, 8064, 48}
+    };
+    for (size_t i = 0; i < sizeof(configs)/sizeof(configs[0]); i++) {
+      if (key.equalsIgnoreCase(configs[i].key)) {
+        return &configs[i];
+      }
+    }
+    if (key.equalsIgnoreCase("30d")) return &configs[6];
+    return &configs[2]; // Default to 24h
+  }
   static String getDeviceHardwareMac() {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -149,7 +176,7 @@ public:
     return cert;
   }
 
-  static String buildExcursionIncidentsHtml() {
+  static String buildExcursionIncidentsHtml(uint32_t cutoffTs = 0, int maxSamples = HISTORY_SIZE) {
     String html = "";
     bool inEpisode = false;
     int episodeType = 0; // 1 = Low, 2 = High
@@ -192,11 +219,18 @@ public:
       html += "</div>";
     };
 
-    for (int i = 0; i < historyCount; i++) {
+    int startOffset = 0;
+    if (cutoffTs == 0 && historyCount > maxSamples) {
+      startOffset = historyCount - maxSamples;
+    }
+
+    for (int i = startOffset; i < historyCount; i++) {
       int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
       if (tempHistory[idx].temp <= -9990) continue;
       float t = tempHistory[idx].temp / 10.0f;
       uint32_t ts = tempHistory[idx].timestamp;
+
+      if (cutoffTs > 0 && ts < cutoffTs) continue;
 
       if (t <= 2.0f) {
         if (!inEpisode || episodeType != 1) {
@@ -236,21 +270,36 @@ public:
 
     if (episodeCount == 0) {
       html += "<div style=\"background:#e6f4ea; border: 1px solid #ceead6; border-radius: 8px; padding: 14px; text-align: center; color: #137333; font-weight: bold; font-size: 13px;\">";
-      html += "  ✅ No Temperature Excursions Recorded &bull; 100% Cold-Chain Compliance Maintained (+2.0&deg;C to +8.0&deg;C)";
+      html += "  ✅ No Temperature Excursions Recorded in Window &bull; 100% Cold-Chain Compliance Maintained (+2.0&deg;C to +8.0&deg;C)";
       html += "</div>";
     }
 
     return html;
   }
 
-  static String buildVerificationHtml(const String& queryCert = "", const String& queryHash = "") {
+  static String buildVerificationHtml(const String& queryCert = "", const String& queryHash = "", const String& queryRange = "24h") {
+    const RangeConfig* cfg = getRangeConfig(queryRange);
+
+    uint32_t nowSec = (uint32_t)time(nullptr);
+    bool hasRealTime = (nowSec > 1000000000UL);
+    uint32_t cutoffTs = hasRealTime ? (nowSec - cfg->durationSec) : 0;
+
+    int startOffset = 0;
+    if (!hasRealTime && historyCount > cfg->maxSamples) {
+      startOffset = historyCount - cfg->maxSamples;
+    }
+
     float minT = 999.0, maxT = -999.0;
     long totalTempTimesTen = 0;
     int validCount = 0;
     int lowViolSamples = 0, highViolSamples = 0;
-    for (int i = 0; i < historyCount; i++) {
+
+    for (int i = startOffset; i < historyCount; i++) {
       int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
       if (tempHistory[idx].temp <= -9990) continue;
+      uint32_t ts = tempHistory[idx].timestamp;
+      if (hasRealTime && ts < cutoffTs) continue;
+
       validCount++;
       totalTempTimesTen += tempHistory[idx].temp;
       float t = tempHistory[idx].temp / 10.0f;
@@ -259,13 +308,13 @@ public:
       if (t <= 2.0f) lowViolSamples++;
       if (t >= 8.0f) highViolSamples++;
     }
+
     float avgT = validCount > 0 ? (totalTempTimesTen / (float)validCount) / 10.0f : 0.0f;
     if (minT > 900.0f) minT = 0.0f;
     if (maxT < -900.0f) maxT = 0.0f;
     float lowViolHours = (lowViolSamples * 5.0f) / 60.0f;
     float highViolHours = (highViolSamples * 5.0f) / 60.0f;
 
-    uint32_t nowSec = (uint32_t)time(nullptr);
     String payload = getAuditPayload(nowSec, validCount, minT, maxT, avgT, lowViolHours, highViolHours);
     String currentHash = computeIntegrityHash(payload);
     String currentCert = getCertificateId(currentHash);
@@ -295,6 +344,7 @@ public:
 
     html += "<table>";
     html += "<tr><th>Verification Status</th><td><strong style=\"color:#137333;\">VALID (Cryptographically Verified)</strong></td></tr>";
+    html += "<tr><th>Audit Window</th><td><strong>" + String(cfg->label) + " (" + String(cfg->displayFreqText) + " intervals)</strong></td></tr>";
     html += "<tr><th>Device Hardware Identity</th><td><code>" + getDeviceHardwareMac() + "</code> (Silicon eFuse MAC)</td></tr>";
     html += "<tr><th>Certificate ID</th><td><strong style=\"color:#1a73e8;\">" + (queryCert.length() > 0 ? queryCert : currentCert) + "</strong></td></tr>";
     html += "<tr><th>SHA-256 Digest</th><td><span class=\"code\">" + (queryHash.length() > 0 ? queryHash : currentHash) + "</span></td></tr>";
@@ -307,19 +357,33 @@ public:
     html += "<div style=\"background:#f8f9fa; border-left:4px solid #1a73e8; padding:12px; margin-bottom:20px; font-size:12.5px; line-height:1.6; color:#444;\">";
     html += "  <strong>🛡️ Verification & Security Proof Architecture:</strong><br>";
     html += "  1. <strong>Silicon eFuse Identity:</strong> The report is stamped with the ESP32-C3 read-only factory MAC (<code>" + getDeviceHardwareMac() + "</code>), guaranteeing authenticity to the physical device.<br>";
-    html += "  2. <strong>Hardware SHA-256 Hash:</strong> The ESP32-C3 crypto accelerator computes an immutable digest over all 30-day metrics, timestamps, and 4-point calibration parameters.<br>";
+    html += "  2. <strong>Hardware SHA-256 Hash:</strong> The ESP32-C3 crypto accelerator computes an immutable digest over all metrics, timestamps, and 4-point calibration parameters.<br>";
     html += "  3. <strong>Anti-Tampering Integrity:</strong> Any post-generation modification to temperature numbers, times, or offsets causes a hash mismatch, invalidating the certificate.";
     html += "</div>";
 
     html += "<div>";
-    html += "  <a href=\"/report\" class=\"btn\">📄 View Current Report</a>";
+    html += "  <a href=\"/report?range=" + String(cfg->key) + "\" class=\"btn\">📄 View Current Report</a>";
     html += "  <a href=\"/\" class=\"btn btn-sec\">⚙️ Config Portal</a>";
     html += "</div>";
     html += "</div></body></html>";
     return html;
   }
 
-  static String buildPdfReportHtml() {
+  static String buildPdfReportHtml(const String& rangeKey = "24h") {
+    const RangeConfig* cfg = getRangeConfig(rangeKey);
+
+    uint32_t nowEpoch = (uint32_t)time(nullptr);
+    bool hasRealTime = (nowEpoch > 1000000000UL);
+    uint32_t cutoffTs = hasRealTime ? (nowEpoch - cfg->durationSec) : 0;
+
+    int startOffset = 0;
+    if (!hasRealTime && historyCount > cfg->maxSamples) {
+      startOffset = historyCount - cfg->maxSamples;
+    }
+
+    std::vector<int> sampleIndices;
+    sampleIndices.reserve(cfg->maxSamples > historyCount ? historyCount : cfg->maxSamples);
+
     float minT = 999.0, maxT = -999.0;
     uint32_t minTime = 0, maxTime = 0;
     long totalTempTimesTen = 0;
@@ -332,21 +396,22 @@ public:
     bool inLow = false;
     bool inHigh = false;
 
-    // Ordered chronological analysis
-    for (int i = 0; i < historyCount; i++) {
+    // Filter samples and compute statistics across window
+    for (int i = startOffset; i < historyCount; i++) {
       int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
-      float tempC = tempHistory[idx].temp / 10.0f;
-      uint32_t ts = tempHistory[idx].timestamp;
-
       if (tempHistory[idx].temp <= -9990) continue; // Unsampled slot
+      uint32_t ts = tempHistory[idx].timestamp;
+      if (hasRealTime && ts < cutoffTs) continue;
 
+      sampleIndices.push_back(idx);
+
+      float tempC = tempHistory[idx].temp / 10.0f;
       validCount++;
       totalTempTimesTen += tempHistory[idx].temp;
 
       if (tempC < minT) { minT = tempC; minTime = ts; }
       if (tempC > maxT) { maxT = tempC; maxTime = ts; }
 
-      // Thresholds: <= 2.0 C or >= 8.0 C
       if (tempC <= 2.0f) {
         lowViolSamples++;
         if (!inLow) { inLow = true; lowEvents++; }
@@ -372,14 +437,15 @@ public:
     // Cryptographic Authenticity Digest
     uint32_t genTime = (uint32_t)time(nullptr);
     String auditPayload = getAuditPayload(genTime, validCount, minT, maxT, avgT, lowViolHours, highViolHours);
+    auditPayload += "|RANGE:" + String(cfg->key);
     String hashStr = computeIntegrityHash(auditPayload);
     String certId = getCertificateId(hashStr);
 
     String hostIp = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "192.168.4.1";
-    String verifyUrl = "http://" + hostIp + "/verify?cert=" + certId + "&hash=" + hashStr;
+    String verifyUrl = "http://" + hostIp + "/verify?cert=" + certId + "&hash=" + hashStr + "&range=" + String(cfg->key);
 
     String html = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">";
-    html += "<title>Cold Chain 30-Day Audit Report</title>";
+    html += "<title>Cold Chain Audit Report (" + String(cfg->label) + ")</title>";
     html += "<script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>";
     html += "<style>";
     html += "@page { size: A4 portrait; margin: 12mm; }";
@@ -416,37 +482,54 @@ public:
     html += ".badge-red { background: #fce8e6; color: #d93025; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
     html += ".badge-blue { background: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
     html += ".badge-green { background: #e6f4ea; color: #137333; padding: 2px 6px; border-radius: 4px; font-weight: bold; }";
-    html += ".no-print { margin-bottom: 15px; display: flex; gap: 10px; }";
-    html += ".btn { background: #1a73e8; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; font-weight: bold; cursor: pointer; text-decoration: none; font-size: 14px; }";
+    html += ".no-print { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }";
+    html += ".btn { background: #1a73e8; color: #fff; border: none; padding: 9px 16px; border-radius: 6px; font-weight: bold; cursor: pointer; text-decoration: none; font-size: 13px; }";
     html += ".watermark { display: none; }";
     html += "@media print { body { background: #fff; padding: 0; } .report-container { box-shadow: none; padding: 0; } .no-print { display: none !important; } .watermark { display: block !important; position: fixed; bottom: 8mm; right: 12mm; font-size: 9.5px; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.5px; } }";
     html += "</style>";
     html += "</head><body>";
 
     html += "<div class=\"report-container\">";
-    html += "<div class=\"no-print\">";
+
+    // Range Selector Bar (Interactive Quick Switching)
+    html += "<div class=\"no-print\" style=\"background:#f0f4f9;border:1px solid #c2e7ff;border-radius:8px;padding:8px 12px;margin-bottom:12px;\">";
+    html += "  <span style=\"font-size:12.5px;font-weight:bold;color:#1a73e8;margin-right:6px;\">⏱️ Select Audit Window:</span>";
+
+    static const char* allKeys[] = { "6h", "12h", "24h", "36h", "1w", "2w", "4w" };
+    static const char* allLabels[] = { "6 Hours (15m)", "12 Hours (15m)", "24 Hours (30m)", "36 Hours (30m)", "1 Week (1h)", "2 Weeks (2h)", "4 Weeks (4h)" };
+
+    for (int k = 0; k < 7; k++) {
+      bool isActive = (String(cfg->key).equalsIgnoreCase(allKeys[k]));
+      String btnStyle = isActive ? "background:#1a73e8;color:#fff;font-weight:bold;box-shadow:0 1px 3px rgba(0,0,0,0.2);" : "background:#fff;color:#1a73e8;border:1px solid #1a73e8;";
+      html += "  <a href=\"/report?range=" + String(allKeys[k]) + "\" style=\"padding:5px 9px;border-radius:5px;text-decoration:none;font-size:11.5px;display:inline-block;" + btnStyle + "\">" + String(allLabels[k]) + "</a>";
+    }
+    html += "</div>";
+
+    // Action Buttons
+    html += "<div class=\"no-print\" style=\"margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 8px;\">";
     html += "  <button onclick=\"window.print()\" class=\"btn\">🖨️ Print / Save as PDF</button>";
-    html += "  <a href=\"/verify\" class=\"btn\" style=\"background:#137333;\">🛡️ Verify Certificate</a>";
+    html += "  <a href=\"/export_csv?range=" + String(cfg->key) + "\" class=\"btn\" style=\"background:#34a853;\">📥 Download CSV (" + String(cfg->key) + ")</a>";
+    html += "  <a href=\"/verify?cert=" + certId + "&hash=" + hashStr + "&range=" + String(cfg->key) + "\" class=\"btn\" style=\"background:#137333;\">🛡️ Verify Certificate</a>";
     html += "  <a href=\"/\" class=\"btn\" style=\"background:#5f6368;\">⬅️ Back to Portal</a>";
     html += "</div>";
 
     html += "<div class=\"header\">";
     html += "  <div>";
     html += "    <h1 class=\"title\">❄️ Cold Chain Temperature Audit Report</h1>";
-    html += "    <div class=\"meta\">Target Standard: <strong>+2.0 &deg;C to +8.0 &deg;C</strong> | Rolling Window: <strong>Last 30 Days</strong></div>";
+    html += "    <div class=\"meta\">Target Standard: <strong>+2.0 &deg;C to +8.0 &deg;C</strong> | Window: <strong>" + String(cfg->label) + "</strong> | Display Freq: <strong>" + String(cfg->displayFreqText) + "</strong></div>";
     html += "  </div>";
     html += "  <div class=\"meta\" style=\"text-align:right;\">";
     html += "    <div>Device: <strong>" + cfgMgr.config.bleTargetName + "</strong> (" + cfgMgr.config.bleTargetMac + ")</div>";
     html += "    <div>Generated: <strong>" + formatTimestampWithSec(genTime) + "</strong></div>";
-    html += "    <div>Total Samples: <strong>" + String(validCount) + " (5 min interval)</strong></div>";
+    html += "    <div>Window Samples: <strong>" + String(validCount) + " (5-min base reads)</strong></div>";
     html += "  </div>";
     html += "</div>";
 
-    // Tamper-Proof Cryptographic Seal Card with ZERO-DEPENDENCY OFFLINE SVG QR
+    // Tamper-Proof Cryptographic Seal Card
     html += "<div class=\"seal-box\">";
     html += "  <div class=\"seal-info\">";
     html += "    <div class=\"seal-title\">🛡️ Cryptographic Integrity & Authenticity Seal (Tamper-Proof)</div>";
-    html += "    <div class=\"seal-desc\">Issued by onboard ESP32-C3 hardware security subsystem. Any manual alteration to measurement values, timestamps, or limits invalidates this cryptographic seal.</div>";
+    html += "    <div class=\"seal-desc\">Issued by onboard ESP32-C3 hardware security subsystem. Validated for <strong>" + String(cfg->label) + "</strong> window. Any alteration invalidates this digital certificate.</div>";
     html += "    <div class=\"seal-grid\">";
     html += "      <div><strong>Certificate ID:</strong> <span class=\"badge-blue\">" + certId + "</span></div>";
     html += "      <div><strong>Hardware Identity:</strong> <code>" + getDeviceHardwareMac() + "</code></div>";
@@ -461,12 +544,12 @@ public:
 
     html += "<div class=\"kpi-grid\">";
     html += "  <div class=\"kpi " + String(minT < 2.0f ? "freeze" : "safe") + "\">";
-    html += "    <div class=\"kpi-lbl\">30d Minimum</div>";
+    html += "    <div class=\"kpi-lbl\">Window Minimum</div>";
     html += "    <div class=\"kpi-val\">" + String(minT, 1) + " &deg;C</div>";
     html += "    <div class=\"kpi-sub\">" + formatTimestamp(minTime) + "</div>";
     html += "  </div>";
     html += "  <div class=\"kpi " + String(maxT > 8.0f ? "heat" : "safe") + "\">";
-    html += "    <div class=\"kpi-lbl\">30d Maximum</div>";
+    html += "    <div class=\"kpi-lbl\">Window Maximum</div>";
     html += "    <div class=\"kpi-val\">" + String(maxT, 1) + " &deg;C</div>";
     html += "    <div class=\"kpi-sub\">" + formatTimestamp(maxTime) + "</div>";
     html += "  </div>";
@@ -476,18 +559,22 @@ public:
     html += "    <div class=\"kpi-sub\">Within Safe Band</div>";
     html += "  </div>";
     html += "  <div class=\"kpi " + String((lowViolSamples + highViolSamples) > 0 ? "heat" : "safe") + "\">";
-    html += "    <div class=\"kpi-lbl\">Total Excursion Duration</div>";
+    html += "    <div class=\"kpi-lbl\">Excursion Duration</div>";
     html += "    <div class=\"kpi-val\">" + String(lowViolHours + highViolHours, 1) + " hrs</div>";
-    html += "    <div class=\"kpi-sub\">" + String(lowEvents + highEvents) + " violation episodes</div>";
+    html += "    <div class=\"kpi-sub\">" + String(lowEvents + highEvents) + " episodes</div>";
     html += "  </div>";
     html += "</div>";
 
-    html += "<div class=\"sec-title\">📈 30-Day Temperature Profile (Time Series)</div>";
-    html += "<div class=\"chart-box\"><canvas id=\"tempChart\"></canvas></div>";
+    // Chart Box
+    html += "<div class=\"sec-title\">📈 Temperature Trend & Stability Profile (Visualized: " + String(cfg->displayFreqText) + " Intervals)</div>";
+    html += "<div class=\"chart-box\">";
+    html += "  <canvas id=\"tempChart\"></canvas>";
+    html += "</div>";
 
-    html += "<div class=\"sec-title\">⚠️ Alarm & Excursion Analytics (&le; 2.0&deg;C or &ge; 8.0&deg;C)</div>";
+    // Violation Table
+    html += "<div class=\"sec-title\">📊 Window Excursion & Alarm Analytics</div>";
     html += "<table><thead><tr>";
-    html += "<th>Excursion Type</th><th>Threshold</th><th>Events Count</th><th>Cumulative Duration</th><th>Status</th>";
+    html += "<th>Event Category</th><th>Criterion</th><th>Incidents</th><th>Total Cumulative Time</th><th>Status</th>";
     html += "</tr></thead><tbody>";
     html += "<tr>";
     html += "  <td><span class=\"badge-blue\">FREEZE RISK</span></td>";
@@ -495,8 +582,7 @@ public:
     html += "  <td>" + String(lowEvents) + "</td>";
     html += "  <td>" + String(lowViolHours, 1) + " hours (" + String(lowViolSamples * 5) + " min)</td>";
     html += "  <td>" + String(lowEvents > 0 ? "<span style=\"color:#1a73e8;font-weight:bold;\">VIOLATION DETECTED</span>" : "Compliant (0 hrs)") + "</td>";
-    html += "</tr>";
-    html += "<tr>";
+    html += "</tr><tr>";
     html += "  <td><span class=\"badge-red\">WARMTH EXCURSION</span></td>";
     html += "  <td>&ge; 8.0 &deg;C</td>";
     html += "  <td>" + String(highEvents) + "</td>";
@@ -505,99 +591,67 @@ public:
     html += "</tr>";
     html += "</tbody></table>";
 
-    // 5-Minute Detailed Incident Traceability Logs
-    html += "<div class=\"sec-title\">🚨 Cold Chain Excursion Incidents & 5-Minute Traceability Log</div>";
-    html += buildExcursionIncidentsHtml();
+    // Traceability Logs
+    html += "<div class=\"sec-title\">🚨 Cold Chain Excursion Incidents & Traceability Log</div>";
+    html += buildExcursionIncidentsHtml(cutoffTs, cfg->maxSamples);
 
-    // Calibration Certificate & Traceability
+    html += "<div class=\"sec-title\">🕒 Periodic Measurement Traceability Log (" + String(cfg->displayFreqText) + " Intervals)</div>";
+    html += "<table style=\"margin-bottom:20px;\"><thead><tr>";
+    html += "<th>#</th><th>Timestamp</th><th>Reading (&deg;C)</th><th>Cold-Chain Status</th><th>Safe Band Offset</th>";
+    html += "</tr></thead><tbody>";
+
+    int rowNum = 1;
+    for (size_t k = 0; k < sampleIndices.size(); k += cfg->displayStep) {
+      int idx = sampleIndices[k];
+      float tVal = tempHistory[idx].temp / 10.0f;
+      uint32_t ts = tempHistory[idx].timestamp;
+      String statusBadge = (tVal <= 2.0f) ? "<span class=\"badge-blue\">FREEZE RISK</span>" : (tVal >= 8.0f ? "<span class=\"badge-red\">WARMTH BREACH</span>" : "<span class=\"badge-green\">SAFE BAND</span>");
+      String deltaStr = (tVal <= 2.0f) ? String(tVal - 2.0f, 1) + " &deg;C (below +2.0&deg;C)" : (tVal >= 8.0f ? "+" + String(tVal - 8.0f, 1) + " &deg;C (above +8.0&deg;C)" : "Optimal");
+      html += "<tr><td>" + String(rowNum++) + "</td><td>" + formatTimestampWithSec(ts) + "</td><td><strong>" + String(tVal, 1) + " &deg;C</strong></td><td>" + statusBadge + "</td><td>" + deltaStr + "</td></tr>";
+    }
+
+    if (!sampleIndices.empty() && (sampleIndices.size() - 1) % cfg->displayStep != 0) {
+      int lastIdx = sampleIndices.back();
+      float tVal = tempHistory[lastIdx].temp / 10.0f;
+      uint32_t ts = tempHistory[lastIdx].timestamp;
+      String statusBadge = (tVal <= 2.0f) ? "<span class=\"badge-blue\">FREEZE RISK</span>" : (tVal >= 8.0f ? "<span class=\"badge-red\">WARMTH BREACH</span>" : "<span class=\"badge-green\">SAFE BAND</span>");
+      html += "<tr><td>" + String(rowNum++) + " (Latest)</td><td>" + formatTimestampWithSec(ts) + "</td><td><strong>" + String(tVal, 1) + " &deg;C</strong></td><td>" + statusBadge + "</td><td>Real-time latest</td></tr>";
+    }
+    html += "</tbody></table>";
+
+    // Calibration
     float d2 = cfgMgr.config.calRaw2 - 2.0f;
     float d4 = cfgMgr.config.calRaw4 - 4.0f;
     float d6 = cfgMgr.config.calRaw6 - 6.0f;
     float d8 = cfgMgr.config.calRaw8 - 8.0f;
-
     html += "<div class=\"sec-title\">🎯 Laboratory 4-Point Temperature Calibration Certificate</div>";
-    html += "<table><thead><tr>";
-    html += "<th>Parameter</th><th>Point 1 (2.0 &deg;C)</th><th>Point 2 (4.0 &deg;C)</th><th>Point 3 (6.0 &deg;C)</th><th>Point 4 (8.0 &deg;C)</th><th>Overall Traceability</th>";
-    html += "</tr></thead><tbody>";
-    html += "<tr>";
-    html += "  <td><strong>Master Reference</strong></td><td>2.00 &deg;C</td><td>4.00 &deg;C</td><td>6.00 &deg;C</td><td>8.00 &deg;C</td>";
-    html += "  <td rowspan=\"3\" style=\"vertical-align:middle;background:#f8f9fa;\">";
-    html += "    <strong>Calibration Date:</strong><br><span class=\"badge-blue\">" + cfgMgr.config.calDate + "</span><br><br>";
-    html += "    <strong>Std Deviation (&sigma;):</strong><br><span class=\"badge-green\">&plusmn;" + String(cfgMgr.config.calStdDev, 2) + " &deg;C</span>";
-    html += "  </td>";
-    html += "</tr>";
-    html += "<tr>";
-    html += "  <td><strong>Sensor Raw Value</strong></td>";
-    html += "  <td>" + String(cfgMgr.config.calRaw2, 2) + " &deg;C</td>";
-    html += "  <td>" + String(cfgMgr.config.calRaw4, 2) + " &deg;C</td>";
-    html += "  <td>" + String(cfgMgr.config.calRaw6, 2) + " &deg;C</td>";
-    html += "  <td>" + String(cfgMgr.config.calRaw8, 2) + " &deg;C</td>";
-    html += "</tr>";
-    html += "<tr>";
-    html += "  <td><strong>Deviation Offset (&Delta;)</strong></td>";
+    html += "<table><thead><tr><th>Parameter</th><th>Point 1 (2.0 &deg;C)</th><th>Point 2 (4.0 &deg;C)</th><th>Point 3 (6.0 &deg;C)</th><th>Point 4 (8.0 &deg;C)</th><th>Overall Traceability</th></tr></thead><tbody>";
+    html += "<tr><td><strong>Master Reference</strong></td><td>2.00 &deg;C</td><td>4.00 &deg;C</td><td>6.00 &deg;C</td><td>8.00 &deg;C</td><td rowspan=\"3\" style=\"vertical-align:middle;background:#f8f9fa;\"><strong>Calibration Date:</strong><br><span class=\"badge-blue\">" + cfgMgr.config.calDate + "</span><br><br><strong>Std Deviation (&sigma;):</strong><br><span class=\"badge-green\">&plusmn;" + String(cfgMgr.config.calStdDev, 2) + " &deg;C</span></td></tr>";
+    html += "<tr><td><strong>Sensor Raw Value</strong></td><td>" + String(cfgMgr.config.calRaw2, 2) + " &deg;C</td><td>" + String(cfgMgr.config.calRaw4, 2) + " &deg;C</td><td>" + String(cfgMgr.config.calRaw6, 2) + " &deg;C</td><td>" + String(cfgMgr.config.calRaw8, 2) + " &deg;C</td></tr>";
     char offBuf[32];
-    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d2);
-    html += "  <td>" + String(offBuf) + "</td>";
-    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d4);
-    html += "  <td>" + String(offBuf) + "</td>";
-    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d6);
-    html += "  <td>" + String(offBuf) + "</td>";
-    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d8);
-    html += "  <td>" + String(offBuf) + "</td>";
-    html += "</tr>";
+    html += "<tr><td><strong>Deviation Offset (&Delta;)</strong></td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d2); html += "<td>" + String(offBuf) + "</td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d4); html += "<td>" + String(offBuf) + "</td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d6); html += "<td>" + String(offBuf) + "</td>";
+    snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d8); html += "<td>" + String(offBuf) + "</td></tr>";
     html += "</tbody></table>";
 
-    // Chart.js Data injection
+    // Chart.js
     html += "<script>";
-    html += "const labels = [];";
-    html += "const temps = [];";
-    
-    // Sample down if needed or stream every N points for smooth render
-    int step = (validCount > 1000) ? 2 : 1; 
-    for (int i = 0; i < historyCount; i += step) {
-      int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
-      if (tempHistory[idx].temp <= -9990) continue;
-      float tVal = tempHistory[idx].temp / 10.0f;
-      html += "labels.push('" + formatTimestamp(tempHistory[idx].timestamp) + "');";
-      html += "temps.push(" + String(tVal, 1) + ");";
+    html += "const labels = []; const temps = [];";
+    for (size_t k = 0; k < sampleIndices.size(); k += cfg->displayStep) {
+      int idx = sampleIndices[k];
+      html += "labels.push('" + formatTimestamp(tempHistory[idx].timestamp) + "'); temps.push(" + String(tempHistory[idx].temp / 10.0f, 1) + ");";
     }
-
+    if (!sampleIndices.empty() && (sampleIndices.size() - 1) % cfg->displayStep != 0) {
+      int lastIdx = sampleIndices.back();
+      html += "labels.push('" + formatTimestamp(tempHistory[lastIdx].timestamp) + "'); temps.push(" + String(tempHistory[lastIdx].temp / 10.0f, 1) + ");";
+    }
     html += "const ctx = document.getElementById('tempChart').getContext('2d');";
-    html += "new Chart(ctx, {";
-    html += "  type: 'line',";
-    html += "  data: {";
-    html += "    labels: labels,";
-    html += "    datasets: [{";
-    html += "      label: 'Temperature (C)',";
-    html += "      data: temps,";
-    html += "      borderColor: '#1a73e8',";
-    html += "      backgroundColor: 'rgba(26, 115, 232, 0.05)',";
-    html += "      borderWidth: 1.5,";
-    html += "      pointRadius: 0,";
-    html += "      fill: true,";
-    html += "      tension: 0.1";
-    html += "    }]";
-    html += "  },";
-    html += "  options: {";
-    html += "    responsive: true,";
-    html += "    maintainAspectRatio: false,";
-    html += "    scales: {";
-    html += "      y: {";
-    html += "        title: { display: true, text: 'Temperature (C)' },";
-    html += "        suggestedMin: 0,";
-    html += "        suggestedMax: 10";
-    html += "      },";
-    html += "      x: {";
-    html += "        ticks: { maxTicksLimit: 10 }";
-    html += "      }";
-    html += "    }";
-    html += "  }";
-    html += "});";
+    html += "new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: 'Temperature (C) - " + String(cfg->displayFreqText) + " intervals', data: temps, borderColor: '#1a73e8', backgroundColor: 'rgba(26, 115, 232, 0.05)', borderWidth: 1.5, pointRadius: " + String(sampleIndices.size() / cfg->displayStep <= 50 ? "3" : "0") + ", fill: true, tension: 0.1 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { title: { display: true, text: 'Temperature (C)' }, suggestedMin: 0, suggestedMax: 10 }, x: { ticks: { maxTicksLimit: 12 } } } } });";
     html += "</script>";
 
-    // Print Watermark (Shows only when printed / saved to PDF)
-    html += "<div class=\"watermark\">🛡️ AUTHENTIC COLD-CHAIN AUDIT &bull; HARDWARE MAC: " + getDeviceHardwareMac() + " &bull; SHA-256: " + hashStr.substring(0, 16) + "...</div>";
-
+    html += "<div class=\"watermark\">🛡️ AUTHENTIC COLD-CHAIN AUDIT &bull; WINDOW: " + String(cfg->label) + " &bull; HARDWARE MAC: " + getDeviceHardwareMac() + " &bull; SHA-256: " + hashStr.substring(0, 16) + "...</div>";
     html += "</div></body></html>";
     return html;
   }

@@ -71,6 +71,14 @@ private:
     html += "  m.style.display = 'flex';";
     html += "  fetch('/trigger_scan').then(r => r.text()).then(d => { window.location.href = '/'; });";
     html += "}";
+    html += "function updateReportUrls(range){";
+    html += "  var rep = document.getElementById('btn-report');";
+    html += "  var csv = document.getElementById('btn-csv');";
+    html += "  var vrf = document.getElementById('btn-verify');";
+    html += "  if (rep) rep.href = '/report?range=' + range;";
+    html += "  if (csv) { csv.href = '/export_csv?range=' + range; csv.setAttribute('download', 'cold_chain_' + range + '.csv'); }";
+    html += "  if (vrf) vrf.href = '/verify?range=' + range;";
+    html += "}";
     html += "</script>";
     html += "</head><body>";
 
@@ -83,12 +91,22 @@ private:
     html += "</div>";
 
     html += "<div class=\"card\" style=\"background:#eef7ff;border:1.5px solid #1a73e8;\">";
-    html += "<h2 style=\"color:#1a73e8;border-color:#d2e3fc;\">📊 Cold Chain Analytics & Report Export</h2>";
-    html += "<p style=\"font-size:13px;color:#444;margin-bottom:12px;\">Export official 30-day temperature logs, violation history, and print-ready PDF audit reports.</p>";
+    html += "<h2 style=\"color:#1a73e8;border-color:#d2e3fc;\">📊 Cold Chain Analytics & Tamper-Proof Audit Reports</h2>";
+    html += "<p style=\"font-size:13px;color:#444;margin-bottom:12px;\">Export official temperature logs, excursion history, and print-ready PDF audit reports tailored by time window and sampling frequency.</p>";
+    html += "<label style=\"font-size:13px;font-weight:bold;color:#1a73e8;margin-bottom:6px;display:block;\">Select Audit Window & Measurement Interval:</label>";
+    html += "<select id=\"report_range_sel\" onchange=\"updateReportUrls(this.value)\" style=\"padding:10px;border:1.5px solid #1a73e8;border-radius:6px;font-weight:600;font-size:14px;background:#fff;margin-bottom:15px;cursor:pointer;\">";
+    html += "  <option value=\"6h\">6 Hours (15-min intervals)</option>";
+    html += "  <option value=\"12h\">12 Hours (15-min intervals)</option>";
+    html += "  <option value=\"24h\" selected>24 Hours (30-min intervals)</option>";
+    html += "  <option value=\"36h\">36 Hours (30-min intervals)</option>";
+    html += "  <option value=\"1w\">Son 1 Hafta / 7 Days (1-hour intervals)</option>";
+    html += "  <option value=\"2w\">Son 2 Hafta / 14 Days (2-hour intervals)</option>";
+    html += "  <option value=\"4w\">Son 4 Hafta / 28 Days (4-hour intervals)</option>";
+    html += "</select>";
     html += "<div style=\"display:flex;gap:10px;flex-wrap:wrap;\">";
-    html += "  <a href=\"/report\" target=\"_blank\" style=\"flex:1;min-width:130px;background:#1a73e8;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">📄 PDF Audit Report</a>";
-    html += "  <a href=\"/export_csv\" download=\"temperature_history_30d.csv\" style=\"flex:1;min-width:130px;background:#34a853;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">📥 Download CSV</a>";
-    html += "  <a href=\"/verify\" style=\"flex:1;min-width:130px;background:#137333;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">🛡️ Verify Certificate</a>";
+    html += "  <a id=\"btn-report\" href=\"/report?range=24h\" target=\"_blank\" style=\"flex:1;min-width:130px;background:#1a73e8;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">📄 PDF Audit Report</a>";
+    html += "  <a id=\"btn-csv\" href=\"/export_csv?range=24h\" download=\"cold_chain_24h.csv\" style=\"flex:1;min-width:130px;background:#34a853;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">📥 Download CSV</a>";
+    html += "  <a id=\"btn-verify\" href=\"/verify?range=24h\" style=\"flex:1;min-width:130px;background:#137333;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">🛡️ Verify Certificate</a>";
     html += "  <a href=\"/about\" style=\"flex:1;min-width:130px;background:#5f6368;color:#fff;text-decoration:none;padding:12px;border-radius:6px;font-weight:bold;text-align:center;font-size:14px;\">ℹ️ About & Docs</a>";
     html += "</div>";
     html += "</div>";
@@ -320,10 +338,11 @@ public:
     });
 
     server.on("/report", HTTP_GET, [this]() {
-      Serial.println("[PORTAL] Serving /report...");
+      String range = server.hasArg("range") ? server.arg("range") : "24h";
+      Serial.printf("[PORTAL] Serving /report (range=%s)...\n", range.c_str());
       server.sendHeader("Connection", "close");
       server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      server.send(200, "text/html; charset=utf-8", ReportGenerator::buildPdfReportHtml());
+      server.send(200, "text/html; charset=utf-8", ReportGenerator::buildPdfReportHtml(range));
     });
 
     server.on("/about", HTTP_GET, [this]() {
@@ -335,23 +354,44 @@ public:
     server.on("/verify", HTTP_GET, [this]() {
       String qCert = server.hasArg("cert") ? server.arg("cert") : "";
       String qHash = server.hasArg("hash") ? server.arg("hash") : "";
+      String qRange = server.hasArg("range") ? server.arg("range") : "24h";
       server.sendHeader("Connection", "close");
       server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      server.send(200, "text/html; charset=utf-8", ReportGenerator::buildVerificationHtml(qCert, qHash));
+      server.send(200, "text/html; charset=utf-8", ReportGenerator::buildVerificationHtml(qCert, qHash, qRange));
     });
 
     server.on("/export_csv", HTTP_GET, [this]() {
-      server.sendHeader("Content-Disposition", "attachment; filename=\"cold_chain_30d.csv\"");
+      String range = server.hasArg("range") ? server.arg("range") : "24h";
+      const RangeConfig* cfg = ReportGenerator::getRangeConfig(range);
+      server.sendHeader("Content-Disposition", "attachment; filename=\"cold_chain_" + String(cfg->key) + ".csv\"");
       server.setContentLength(CONTENT_LENGTH_UNKNOWN);
 
-      String csvMeta = "MAC:" + ReportGenerator::getDeviceHardwareMac() + "|CAL:" + cfgMgr.config.calDate + "|COUNT:" + String(historyCount);
+      uint32_t nowEpoch = (uint32_t)time(nullptr);
+      bool hasRealTime = (nowEpoch > 1000000000UL);
+      uint32_t cutoffTs = hasRealTime ? (nowEpoch - cfg->durationSec) : 0;
+
+      int startOffset = 0;
+      if (!hasRealTime && historyCount > cfg->maxSamples) {
+        startOffset = historyCount - cfg->maxSamples;
+      }
+
+      int filteredCount = 0;
+      for (int i = startOffset; i < historyCount; i++) {
+        int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
+        if (tempHistory[idx].temp <= -9990) continue;
+        if (hasRealTime && tempHistory[idx].timestamp < cutoffTs) continue;
+        filteredCount++;
+      }
+
+      String csvMeta = "MAC:" + ReportGenerator::getDeviceHardwareMac() + "|CAL:" + cfgMgr.config.calDate + "|COUNT:" + String(filteredCount) + "|RANGE:" + String(cfg->key);
       String csvHash = ReportGenerator::computeIntegrityHash(csvMeta);
       String certId = ReportGenerator::getCertificateId(csvHash);
 
-      String header = "# Thermo_Obs Cold Chain 30-Day Audit Data (Tamper-Proof Export)\r\n";
+      String header = "# Thermo_Obs Cold Chain Audit Data (" + String(cfg->label) + " Tamper-Proof Export)\r\n";
       header += "# Certificate ID: " + certId + "\r\n";
       header += "# Hardware Identity (MAC): " + ReportGenerator::getDeviceHardwareMac() + "\r\n";
       header += "# Cryptographic SHA-256 Digest: " + csvHash + "\r\n";
+      header += "# Audit Window: " + String(cfg->label) + " (" + String(cfg->displayFreqText) + " Display Intervals)\r\n";
       header += "# Calibration Date: " + cfgMgr.config.calDate + "\r\n";
       header += "# Calibration Points: Ref[2.0, 4.0, 6.0, 8.0] -> Sensor[" +
                 String(cfgMgr.config.calRaw2, 2) + ", " +
@@ -362,9 +402,10 @@ public:
       header += "Timestamp,DateTime,Temperature_C,Status\r\n";
       server.send(200, "text/csv", header);
 
-      for (int i = 0; i < historyCount; i++) {
+      for (int i = startOffset; i < historyCount; i++) {
         int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
         if (tempHistory[idx].temp <= -9990) continue;
+        if (hasRealTime && tempHistory[idx].timestamp < cutoffTs) continue;
 
         float tVal = tempHistory[idx].temp / 10.0f;
         String line = String(tempHistory[idx].timestamp) + "," +
