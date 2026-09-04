@@ -471,9 +471,26 @@ void startWPSProcess() {
   Serial.println("\n[WPS] WPS PBC Started. Please press WPS button on your router...");
 }
 
-void sendTelegramMessage(String msg) {
-  if (cfgMgr.config.telegramBotToken.length() == 0 || cfgMgr.config.telegramChatId.length() == 0) return;
+const char* getWiFiStatusText(wl_status_t status) {
+  switch (status) {
+    case WL_IDLE_STATUS: return "IDLE";
+    case WL_NO_SSID_AVAIL: return "NO_SSID_AVAIL (SSID not found)";
+    case WL_SCAN_COMPLETED: return "SCAN_COMPLETED";
+    case WL_CONNECTED: return "CONNECTED";
+    case WL_CONNECT_FAILED: return "CONNECT_FAILED (Auth/Password error?)";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+    case WL_DISCONNECTED: return "DISCONNECTED";
+    default: return "UNKNOWN";
+  }
+}
 
+void sendTelegramMessage(String msg) {
+  if (cfgMgr.config.telegramBotToken.length() == 0 || cfgMgr.config.telegramChatId.length() == 0) {
+    Serial.println("[Telegram] ℹ️ Telegram not configured (Token or Chat ID empty in NVS).");
+    return;
+  }
+
+  Serial.println("[Telegram] 📤 Dispatching alert to Telegram...");
   NetworkClientSecure client;
   client.setInsecure();
   HTTPClient https;
@@ -483,25 +500,47 @@ void sendTelegramMessage(String msg) {
                "&text=" + urlEncode(msg);
 
   if (https.begin(client, url)) {
-    https.setTimeout(8000);
+    https.setTimeout(10000);
+    unsigned long tStart = millis();
     int code = https.GET();
-    Serial.printf("[Telegram] Response Code: %d\n", code);
+    unsigned long dur = millis() - tStart;
+
+    if (code > 0) {
+      Serial.printf("[Telegram] ✅ HTTP Response: %d (took %lu ms)\n", code, dur);
+      if (code != 200) {
+        String resp = https.getString();
+        Serial.printf("[Telegram] ⚠️ Telegram API Error Body: %s\n", resp.c_str());
+      }
+    } else {
+      Serial.printf("[Telegram] ❌ Connection failed! Error: %s (code %d, took %lu ms)\n",
+                    https.errorToString(code).c_str(), code, dur);
+    }
     https.end();
+  } else {
+    Serial.println("[Telegram] ❌ https.begin() failed! Cannot initialize TLS connection to api.telegram.org");
   }
 }
 
 void sendWebhookMessage(String jsonPayload) {
   if (cfgMgr.config.webhookUrl.length() == 0) return;
 
+  Serial.printf("[Webhook] 📤 Sending POST to: %s\n", cfgMgr.config.webhookUrl.c_str());
   NetworkClientSecure client;
   client.setInsecure();
   HTTPClient https;
 
   if (https.begin(client, cfgMgr.config.webhookUrl)) {
     https.addHeader("Content-Type", "application/json");
-    https.setTimeout(8000);
-    https.POST(jsonPayload);
+    https.setTimeout(10000);
+    int code = https.POST(jsonPayload);
+    if (code > 0) {
+      Serial.printf("[Webhook] ✅ Response: %d\n", code);
+    } else {
+      Serial.printf("[Webhook] ❌ POST failed! Error: %s (code %d)\n", https.errorToString(code).c_str(), code);
+    }
     https.end();
+  } else {
+    Serial.println("[Webhook] ❌ https.begin() failed!");
   }
 }
 
@@ -517,72 +556,131 @@ bool checkMenuAbort() {
 }
 
 bool connectToAvailableWiFi() {
-  if (cfgMgr.config.wifiSsid.length() > 0 && cfgMgr.config.wifiSsid != "YOUR_WIFI_SSID") {
-    Serial.printf("[WIFI] Trying Primary SSID: %s\n", cfgMgr.config.wifiSsid.c_str());
+  Serial.println("\n[WIFI] ================= Wi-Fi Connection Phase ================");
+  Serial.printf("[WIFI] Free Heap: %u bytes (Min Ever: %u bytes)\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+
+  bool hasPrimary = (cfgMgr.config.wifiSsid.length() > 0 && cfgMgr.config.wifiSsid != "YOUR_WIFI_SSID");
+  bool hasBackup = (cfgMgr.config.backupWifiSsid.length() > 0);
+
+  if (!hasPrimary && !hasBackup) {
+    Serial.println("[WIFI] ❌ No Wi-Fi credentials configured! (Primary SSID is empty or default).");
+    Serial.println("[WIFI] Please enter Web Portal (5s button press) and save your Wi-Fi SSID & Password.");
+    Serial.println("[WIFI] ==========================================================\n");
+    wifiConnectedStatus = false;
+    return false;
+  }
+
+  if (hasPrimary) {
+    Serial.printf("[WIFI] [1/2] Connecting to Primary SSID: '%s'...\n", cfgMgr.config.wifiSsid.c_str());
+    WiFi.disconnect(true);
+    delay(50);
     WiFi.begin(cfgMgr.config.wifiSsid.c_str(), cfgMgr.config.wifiPass.c_str());
 
     unsigned long start = millis();
+    int dots = 0;
     while (WiFi.status() != WL_CONNECTED && (millis() - start < 15000)) {
-      delay(50);
+      delay(500);
+      Serial.print(".");
+      dots++;
+      if (dots % 20 == 0) Serial.println();
       if (checkMenuAbort()) {
+        Serial.println("\n[WIFI] ⏹️ Connection cancelled by user button press.");
         WiFi.disconnect(true);
         wifiConnectedStatus = false;
         return false;
       }
     }
+    Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
-      Serial.printf("[WIFI] Connected to Primary! IP: %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WIFI] ✅ Connected to Primary SSID: '%s'\n", cfgMgr.config.wifiSsid.c_str());
+      Serial.printf("[WIFI] 📍 IP: %s | Gateway: %s | RSSI: %d dBm\n",
+                    WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
+      Serial.println("[WIFI] ==========================================================\n");
       if (!isTimeSynced || (millis() - lastNtpSyncTime >= 86400000UL)) syncNtpTime();
       return true;
+    } else {
+      Serial.printf("[WIFI] ⚠️ Primary connection failed after 15s! Reason: %s (status %d)\n",
+                    getWiFiStatusText(WiFi.status()), (int)WiFi.status());
     }
   }
 
-  if (cfgMgr.config.backupWifiSsid.length() > 0) {
-    Serial.printf("[WIFI] Trying Backup SSID: %s\n", cfgMgr.config.backupWifiSsid.c_str());
+  if (hasBackup) {
+    Serial.printf("[WIFI] [2/2] Connecting to Backup SSID: '%s'...\n", cfgMgr.config.backupWifiSsid.c_str());
     WiFi.disconnect(true);
-    delay(50);
+    delay(100);
     WiFi.begin(cfgMgr.config.backupWifiSsid.c_str(), cfgMgr.config.backupWifiPass.c_str());
 
     unsigned long start = millis();
+    int dots = 0;
     while (WiFi.status() != WL_CONNECTED && (millis() - start < 15000)) {
-      delay(50);
+      delay(500);
+      Serial.print(".");
+      dots++;
+      if (dots % 20 == 0) Serial.println();
       if (checkMenuAbort()) {
+        Serial.println("\n[WIFI] ⏹️ Connection cancelled by user button press.");
         WiFi.disconnect(true);
         wifiConnectedStatus = false;
         return false;
       }
     }
+    Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
-      Serial.printf("[WIFI] Connected to Backup! IP: %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WIFI] ✅ Connected to Backup SSID: '%s'\n", cfgMgr.config.backupWifiSsid.c_str());
+      Serial.printf("[WIFI] 📍 IP: %s | Gateway: %s | RSSI: %d dBm\n",
+                    WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
+      Serial.println("[WIFI] ==========================================================\n");
       if (!isTimeSynced || (millis() - lastNtpSyncTime >= 86400000UL)) syncNtpTime();
       return true;
+    } else {
+      Serial.printf("[WIFI] ⚠️ Backup connection failed after 15s! Reason: %s (status %d)\n",
+                    getWiFiStatusText(WiFi.status()), (int)WiFi.status());
     }
   }
 
+  Serial.println("[WIFI] ❌ All Wi-Fi connection attempts failed.");
+  Serial.println("[WIFI] ==========================================================\n");
   wifiConnectedStatus = false;
   return false;
 }
 
 void executeSendCycle() {
+  Serial.println("\n################### [ SEND CYCLE START ] ###################");
+  Serial.printf("[CYCLE] Timestamp: %lu ms\n", millis());
+  Serial.printf("[CYCLE] Telemetry Data: Temp=%.2f C, Hum=%.1f %%, Bat=%d %%, Volt=%.2f V, RSSI=%d dBm\n",
+                measuredTemp, measuredHum, measuredBattery, measuredVoltage, measuredRssi);
+  Serial.printf("[CYCLE] Fresh BLE Data: %s | Power: %s\n",
+                hasFreshData ? "YES" : "NO", isPowerOutage ? "OUTAGE (Battery)" : "ONLINE (Mains)");
+  Serial.printf("[CYCLE] Free Heap before stopping BLE: %u bytes\n", ESP.getFreeHeap());
+
   stopBLE();
   delay(50);
+  Serial.printf("[CYCLE] Free Heap after stopping BLE: %u bytes\n", ESP.getFreeHeap());
 
   WiFi.mode(WIFI_STA);
 
   if (connectToAvailableWiFi()) {
-    if (checkMenuAbort()) { WiFi.disconnect(true); return; }
+    if (checkMenuAbort()) {
+      Serial.println("[CYCLE] ⏹️ Aborted during Wi-Fi connection. Disconnecting Wi-Fi.");
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      return;
+    }
 
+    // --- 1. GOOGLE SHEETS TELEMETRY ---
+    Serial.println("\n--- [ 1. Google Sheets Transmission ] ---");
     if (cfgMgr.config.googleScriptUrl.length() > 0 && cfgMgr.config.googleScriptUrl.indexOf("YOUR_SCRIPT_ID") == -1) {
+      Serial.println("[Sheets] 🌐 Preparing Google Apps Script request...");
       NetworkClientSecure client;
       client.setInsecure();
       HTTPClient https;
 
       String dName = (cfgMgr.config.bleTargetName.length() > 0) ? cfgMgr.config.bleTargetName : measuredDeviceName;
-      String url = cfgMgr.config.googleScriptUrl + "?device=" + dName;
+      String url = cfgMgr.config.googleScriptUrl + "?device=" + urlEncode(dName);
 
       if (hasFreshData) {
         url += "&temp=" + String(measuredTemp, 2) +
@@ -596,37 +694,72 @@ void executeSendCycle() {
         url += "&temp=-&hum=-&bat=-&volt=-&rssi=-&pwr=" + String(isPowerOutage ? "OUTAGE" : "ONLINE") + "&note=No+BLE+Connection";
       }
 
+      Serial.printf("[Sheets] 🔗 URL: %s\n", url.c_str());
+      Serial.printf("[Sheets] 📡 Connecting via HTTPS... (Free Heap: %u bytes)\n", ESP.getFreeHeap());
+
       if (https.begin(client, url)) {
         https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-        https.setTimeout(8000);
+        https.setTimeout(12000); // 12 seconds for Google script execution
+        unsigned long httpStart = millis();
         int code = https.GET();
-        Serial.printf("[Sheets] Response: %d\n", code);
+        unsigned long httpDur = millis() - httpStart;
+
+        if (code > 0) {
+          Serial.printf("[Sheets] ✅ HTTP Success! Status Code: %d (took %lu ms)\n", code, httpDur);
+          String respBody = https.getString();
+          if (respBody.length() > 0) {
+            String preview = respBody.substring(0, 200);
+            preview.replace("\r", "");
+            preview.replace("\n", " ");
+            Serial.printf("[Sheets] 📄 Response Payload: %s%s\n",
+                          preview.c_str(), respBody.length() > 200 ? "..." : "");
+          }
+        } else {
+          Serial.printf("[Sheets] ❌ HTTP GET Failed! Error: %s (Code: %d, took %lu ms)\n",
+                        https.errorToString(code).c_str(), code, httpDur);
+          Serial.println("[Sheets] 💡 Note: Code -1 = DNS/Connection Refused, -11 = Read Timeout.");
+        }
         https.end();
+      } else {
+        Serial.println("[Sheets] ❌ https.begin() failed! Invalid URL or failed TLS client init.");
       }
+    } else {
+      Serial.println("[Sheets] ℹ️ Google Sheets URL not configured or has default placeholder. Skipping.");
     }
 
-    if (checkMenuAbort()) { WiFi.disconnect(true); return; }
+    if (checkMenuAbort()) {
+      Serial.println("[CYCLE] ⏹️ Aborted before alert evaluation.");
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      return;
+    }
 
+    // --- 2. TELEGRAM ALERTS ---
+    Serial.println("\n--- [ 2. Telegram Alert Evaluation ] ---");
     unsigned long now = millis();
 
     // 1. Mains Power Outage & Restored (Independent of temperature)
     if (!hasInitializedPowerState) {
       wasPowerOutage = isPowerOutage;
       hasInitializedPowerState = true;
+      Serial.printf("[Alert] Initialized power state: %s\n", isPowerOutage ? "OUTAGE" : "ONLINE");
     } else {
       if (isPowerOutage && !wasPowerOutage) {
         wasPowerOutage = true;
         lastPowerAlertTime = now;
+        Serial.println("[Alert] ⚡ Mains power outage detected! Sending alert...");
         if (cfgMgr.config.notifyTelegramOnPowerLoss) {
           sendTelegramMessage("⚡ MAINS POWER OUTAGE DETECTED!\nElectricity cut off.\nDevice running on battery.\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
         }
       } else if (!isPowerOutage && wasPowerOutage) {
         wasPowerOutage = false;
+        Serial.println("[Alert] 🔌 Mains power restored! Sending recovery notification...");
         if (cfgMgr.config.notifyTelegramOnPowerLoss) {
           sendTelegramMessage("🔌 MAINS POWER RESTORED!\nGrid electricity is back online.\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
         }
       } else if (isPowerOutage && (now - lastPowerAlertTime >= (unsigned long)cfgMgr.config.powerLossAlertIntervalMin * 60000UL)) {
         lastPowerAlertTime = now;
+        Serial.println("[Alert] ⚠️ Power outage ongoing reminder sending...");
         if (cfgMgr.config.notifyTelegramOnPowerLoss) {
           sendTelegramMessage("⚠️ POWER OUTAGE ONGOING!\nStill running on battery.\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
         }
@@ -637,20 +770,24 @@ void executeSendCycle() {
     if (!hasInitializedBleState) {
       wasBleConnected = bleConnectedStatus;
       hasInitializedBleState = true;
+      Serial.printf("[Alert] Initialized BLE state: %s\n", bleConnectedStatus ? "CONNECTED" : "DISCONNECTED");
     } else {
       if (!bleConnectedStatus && wasBleConnected) {
         wasBleConnected = false;
+        Serial.println("[Alert] ⚠️ BLE connection lost! Sending alert...");
         sendTelegramMessage("⚠️ BLE SENSOR DISCONNECTED!\nNo packet received from thermometer.\nDevice: " + cfgMgr.config.bleTargetName + " (" + cfgMgr.config.bleTargetMac + ")");
       } else if (bleConnectedStatus && !wasBleConnected) {
         wasBleConnected = true;
+        Serial.println("[Alert] ✅ BLE sensor reconnected! Sending notification...");
         sendTelegramMessage("✅ BLE SENSOR RECONNECTED!\nThermometer telemetry restored.\nDevice: " + cfgMgr.config.bleTargetName + "\nCurrent Temp: " + String(measuredTemp, 2) + " °C");
       }
     }
 
     // 3. NTP Timestamp Sync Error Alert
     if (!isTimeSynced && ntpFailedWarning) {
-      if (now - lastNtpErrorAlertTime >= 3600000UL) { // Rate limit: max once per hour
+      if (now - lastNtpErrorAlertTime >= 3600000UL) {
         lastNtpErrorAlertTime = now;
+        Serial.println("[Alert] ⚠️ NTP sync failed. Sending Telegram notification...");
         sendTelegramMessage("⚠️ NTP TIME SYNC ERROR!\nFailed to synchronize clock from NTP servers.\nDevice timestamp is unavailable.");
       }
     }
@@ -658,9 +795,11 @@ void executeSendCycle() {
     // 4. Low / High Temperature Alert & Normalization
     float tMin = isPowerOutage ? cfgMgr.config.powerLossTempMin : cfgMgr.config.normalTempMin;
     float tMax = isPowerOutage ? cfgMgr.config.powerLossTempMax : cfgMgr.config.normalTempMax;
+    Serial.printf("[Alert] Temperature check: Measured=%.2f C | Safe Band: %.1f - %.1f C\n", measuredTemp, tMin, tMax);
 
     if (hasFreshData) {
       if (measuredTemp < tMin) {
+        Serial.printf("[Alert] ❄️ Under-temperature detected (%.2f < %.1f C)!\n", measuredTemp, tMin);
         if (currentTempAlarmState != STATE_TEMP_ALARM_LOW || (now - lastLimitAlertTime >= (unsigned long)cfgMgr.config.limitAlertIntervalMin * 60000UL)) {
           currentTempAlarmState = STATE_TEMP_ALARM_LOW;
           lastLimitAlertTime = now;
@@ -669,8 +808,11 @@ void executeSendCycle() {
                               "\nLower Limit: " + String(tMin, 1) + " °C" +
                               "\nDelta: " + String(measuredTemp - tMin, 2) + " °C below limit!" +
                               "\nPower: " + String(isPowerOutage ? "OUTAGE (Battery)" : "ONLINE"));
+        } else {
+          Serial.println("[Alert] Alert throttled (interval cooldown).");
         }
       } else if (measuredTemp > tMax) {
+        Serial.printf("[Alert] 🔥 Over-temperature detected (%.2f > %.1f C)!\n", measuredTemp, tMax);
         if (currentTempAlarmState != STATE_TEMP_ALARM_HIGH || (now - lastLimitAlertTime >= (unsigned long)cfgMgr.config.limitAlertIntervalMin * 60000UL)) {
           currentTempAlarmState = STATE_TEMP_ALARM_HIGH;
           lastLimitAlertTime = now;
@@ -679,27 +821,34 @@ void executeSendCycle() {
                               "\nUpper Limit: " + String(tMax, 1) + " °C" +
                               "\nDelta: +" + String(measuredTemp - tMax, 2) + " °C above limit!" +
                               "\nPower: " + String(isPowerOutage ? "OUTAGE (Battery)" : "ONLINE"));
+        } else {
+          Serial.println("[Alert] Alert throttled (interval cooldown).");
         }
       } else {
         if (currentTempAlarmState != STATE_TEMP_NORMAL) {
           currentTempAlarmState = STATE_TEMP_NORMAL;
+          Serial.println("[Alert] ✅ Temperature normalized back to safe band.");
           sendTelegramMessage("✅ TEMPERATURE NORMALIZED!\nDevice: " + cfgMgr.config.bleTargetName +
                               "\nTemperature returned to safe zone: " + String(measuredTemp, 2) + " °C" +
                               "\nSafe Band: " + String(tMin, 1) + " - " + String(tMax, 1) + " °C");
+        } else {
+          Serial.println("[Alert] Temperature is within normal bounds. No limit alerts needed.");
         }
       }
 
       // 5. Rapid Temperature Rise / Drop (Ani Sıcaklık Değişimi)
       if (lastSlopeTemp > -900.0f) {
         float deltaT = measuredTemp - lastSlopeTemp;
-        if (fabs(deltaT) >= 1.5f && (now - lastRapidSlopeAlertTime >= 600000UL)) { // >= 1.5 °C change, min 10 min cooldown
+        if (fabs(deltaT) >= 1.5f && (now - lastRapidSlopeAlertTime >= 600000UL)) {
           lastRapidSlopeAlertTime = now;
           if (deltaT > 0) {
+            Serial.printf("[Alert] 📈 Rapid temperature spike detected (+%.2f C)!\n", deltaT);
             sendTelegramMessage("📈 RAPID TEMPERATURE RISE DETECTED!\nDevice: " + cfgMgr.config.bleTargetName +
                                 "\nSudden Jump: +" + String(deltaT, 2) + " °C" +
                                 "\nPrevious: " + String(lastSlopeTemp, 2) + " °C -> Current: " + String(measuredTemp, 2) + " °C" +
                                 "\n⚠️ Possible door open or cooling system fault!");
           } else {
+            Serial.printf("[Alert] 📉 Rapid temperature plunge detected (%.2f C)!\n", deltaT);
             sendTelegramMessage("📉 RAPID TEMPERATURE DROP DETECTED!\nDevice: " + cfgMgr.config.bleTargetName +
                                 "\nSudden Drop: " + String(deltaT, 2) + " °C" +
                                 "\nPrevious: " + String(lastSlopeTemp, 2) + " °C -> Current: " + String(measuredTemp, 2) + " °C");
@@ -708,10 +857,15 @@ void executeSendCycle() {
       }
       lastSlopeTemp = measuredTemp;
     }
+  } else {
+    Serial.println("[CYCLE] ❌ Wi-Fi connection could not be established. Transmission skipped.");
   }
 
+  Serial.println("[CYCLE] Disconnecting Wi-Fi and returning to low-power BLE mode...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
+  Serial.printf("[CYCLE] Free Heap at end of cycle: %u bytes\n", ESP.getFreeHeap());
+  Serial.println("################### [ SEND CYCLE FINISHED ] ###################\n");
 }
 
 // --- OLED Display Rendering ---
