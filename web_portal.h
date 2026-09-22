@@ -250,6 +250,15 @@ public:
       html += "</tr>";
     }
     html += "</tbody></table>";
+    html += "<div style=\"background:#e8f0fe;border-left:4px solid #1a73e8;padding:10px 12px;border-radius:6px;margin-top:12px;font-size:12px;color:#174ea6;\">";
+    html += "<strong>🤖 İki Yönlü Telegram Bot Otomasyonu:</strong><br>";
+    html += "Yukarıda eklenen yetkili Chat ID'ler Telegram botunuza doğrudan mesaj atarak anlık bilgi alabilir:<br>";
+    html += "• <code>durum</code> : Anlık sıcaklık, nem, pil, şebeke elektriği ve sistem özeti<br>";
+    html += "• <code>sicaklik</code> : Sadece güncel derece ve alarm sınırları analizi<br>";
+    html += "• <code>rapor</code> : Hafızadaki verilerin Min / Max / Ortalama istatistiği<br>";
+    html += "• <code>link</code> : Wi-Fi IP adresi ve PDF rapor erişim bağlantısı<br>";
+    html += "• <code>yardim</code> : Tüm kullanılabilir bot komutlarını listeler";
+    html += "</div>";
     html += "</div>";
     html += "<div class=\"card\">";
     html += "<h2>🎯 7. 4-Point Temperature Calibration & Security Lock</h2>";

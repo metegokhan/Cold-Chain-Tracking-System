@@ -137,6 +137,9 @@ TempAlarmState currentTempAlarmState = STATE_TEMP_NORMAL;
 float lastSlopeTemp = -999.0;
 unsigned long lastRapidSlopeAlertTime = 0;
 
+// Telegram Inbound Bot State
+long lastTelegramUpdateId = 0;
+
 void syncNtpTime() {
   Serial.println("[NTP] Syncing network time (GMT+3)...");
   // GMT+3 (Turkey / Europe/Istanbul) = 3 * 3600 = 10800s offset, 0 daylight saving
@@ -271,6 +274,9 @@ bool checkMenuAbort();
 void stopBLE();
 void stopBLEAndFreeMem();
 void startBLEScanForMode();
+bool sendTelegramReply(const String& chatId, const String& msg);
+void handleTelegramBotCommand(const String& chatId, String cmd);
+void processTelegramIncomingMessages();
 
 String urlEncode(String str) {
   String encoded = "";
@@ -577,6 +583,333 @@ void sendTelegramMessage(String msg) {
   }
 
   Serial.printf("[Telegram] 🏁 Broadcast complete: %d/%d recipients delivered.\n", sentSuccess, activeCount);
+}
+
+bool sendTelegramReply(const String& chatId, const String& msg) {
+  if (cfgMgr.config.telegramBotToken.length() == 0 || chatId.length() == 0) return false;
+
+  Serial.printf("[TG-Bot] 📤 Replying to %s: %s\n", chatId.c_str(), msg.substring(0, 30).c_str());
+  String encodedMsg = urlEncode(msg);
+
+  NetworkClientSecure client;
+  client.setInsecure();
+  client.setHandshakeTimeout(10);
+  HTTPClient https;
+
+  String url = "https://api.telegram.org/bot" + cfgMgr.config.telegramBotToken +
+               "/sendMessage?chat_id=" + chatId +
+               "&text=" + encodedMsg;
+
+  bool ok = false;
+  if (https.begin(client, url)) {
+    https.setTimeout(8000);
+    int code = https.GET();
+    if (code == 200) {
+      ok = true;
+      Serial.println("[TG-Bot] ✅ Reply delivered.");
+    } else {
+      Serial.printf("[TG-Bot] ⚠️ Reply failed! Code: %d (%s)\n", code, https.errorToString(code).c_str());
+    }
+    https.end();
+  }
+  return ok;
+}
+
+void handleTelegramBotCommand(const String& chatId, String cmd) {
+  // 1. Authorization check
+  bool isAuth = false;
+  int authCount = 0;
+  for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+    String regId = cfgMgr.config.tgRecipients[i].chatId;
+    regId.trim();
+    if (regId.length() > 0) {
+      authCount++;
+      if (regId == chatId) { isAuth = true; break; }
+    }
+  }
+  if (!isAuth && cfgMgr.config.telegramChatId.length() > 0) {
+    authCount++;
+    if (cfgMgr.config.telegramChatId == chatId) isAuth = true;
+  }
+
+  // If no chat IDs are configured yet, allow the sender to interact
+  if (authCount == 0) isAuth = true;
+
+  if (!isAuth) {
+    Serial.printf("[TG-Bot] ⛔ Unauthorized command attempt from Chat ID: %s\n", chatId.c_str());
+    String unauthMsg = "⛔ YETKİSİZ ERİŞİM!\n\n"
+                       "Bu cihazın yönetim yetkisine sahip değilsiniz.\n"
+                       "Chat ID'niz: " + chatId + "\n\n"
+                       "Cihaz yöneticisi bu Chat ID'yi cihazın web arayüzünden eklemelidir.";
+    sendTelegramReply(chatId, unauthMsg);
+    return;
+  }
+
+  // 2. Command normalization
+  cmd.trim();
+  if (cmd.startsWith("/")) cmd = cmd.substring(1);
+  int atPos = cmd.indexOf('@');
+  if (atPos != -1) cmd = cmd.substring(0, atPos);
+  cmd.trim();
+  String lowerCmd = cmd;
+  lowerCmd.toLowerCase();
+
+  Serial.printf("[TG-Bot] ⚙️ Processing command: '%s' (raw: '%s')\n", lowerCmd.c_str(), cmd.c_str());
+
+  // --- COMMAND 1: DURUM / STATUS / BILGI ---
+  if (lowerCmd == "durum" || lowerCmd == "status" || lowerCmd == "bilgi" || lowerCmd == "info") {
+    String reply = "📊 SİSTEM GENEL DURUMU\n";
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    if (hasFreshData) {
+      reply += "🌡️ Sıcaklık: " + String(measuredTemp, 2) + " °C\n";
+      reply += "💧 Bağıl Nem: %" + String(measuredHum, 1) + "\n";
+      reply += "🔋 Sensör Pili: %" + String(measuredBattery) + " (" + String(measuredVoltage, 2) + " V)\n";
+    } else {
+      reply += "🌡️ Sıcaklık: Sensör verisi bekleniyor...\n";
+    }
+
+    float tMin = isPowerOutage ? cfgMgr.config.powerLossTempMin : cfgMgr.config.normalTempMin;
+    float tMax = isPowerOutage ? cfgMgr.config.powerLossTempMax : cfgMgr.config.normalTempMax;
+    reply += "🎯 Güvenli Bölge: " + String(tMin, 1) + " - " + String(tMax, 1) + " °C\n";
+
+    reply += "⚡ Şebeke Gücü: " + String(isPowerOutage ? "⚠️ KESİNTİ (Pilde)" : "✅ ŞEBEKE AKTİF") + "\n";
+    reply += "🔵 BLE Cihaz: " + (cfgMgr.config.bleTargetName.length() > 0 ? cfgMgr.config.bleTargetName : "Otomatik Bul") +
+             " (" + (bleConnectedStatus ? "Bağlı" : "Aranıyor") + ")\n";
+
+    IPAddress localIp = WiFi.localIP();
+    reply += "📶 Wi-Fi: " + WiFi.SSID() + " (" + String(WiFi.RSSI()) + " dBm)\n";
+    reply += "🌐 Cihaz IP: " + localIp.toString() + "\n";
+
+    time_t nowSec = time(nullptr);
+    if (nowSec > 1000000000) {
+      struct tm* t = localtime(&nowSec);
+      char buf[32];
+      snprintf(buf, sizeof(buf), "%02d.%02d.%04d %02d:%02d",
+               t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+               t->tm_hour, t->tm_min);
+      reply += "🕒 Saat: " + String(buf) + "\n";
+    }
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    reply += "💡 Rapor özeti için 'rapor', komut listesi için 'yardim' yazabilirsiniz.";
+    sendTelegramReply(chatId, reply);
+    return;
+  }
+
+  // --- COMMAND 2: SICAKLIK / ISI / TEMP ---
+  if (lowerCmd == "sicaklik" || lowerCmd == "sıcaklık" || lowerCmd == "isi" ||
+      lowerCmd == "ısı" || lowerCmd == "temp" || lowerCmd == "derece") {
+    String reply = "🌡️ ANLIK SICAKLIK BİLGİSİ\n";
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    if (hasFreshData) {
+      reply += "Anlık Sıcaklık: " + String(measuredTemp, 2) + " °C\n";
+      reply += "Bağıl Nem: %" + String(measuredHum, 1) + "\n";
+      float tMin = isPowerOutage ? cfgMgr.config.powerLossTempMin : cfgMgr.config.normalTempMin;
+      float tMax = isPowerOutage ? cfgMgr.config.powerLossTempMax : cfgMgr.config.normalTempMax;
+      reply += "Hedef Aralık: " + String(tMin, 1) + " °C ile " + String(tMax, 1) + " °C arası\n";
+      if (measuredTemp < tMin) {
+        reply += "Durum: ❄️ DÜŞÜK SICAKLIK ALARMI!\n";
+      } else if (measuredTemp > tMax) {
+        reply += "Durum: 🔥 YÜKSEK SICAKLIK ALARMI!\n";
+      } else {
+        reply += "Durum: ✅ NORMAL (Güvenli Bölgede)\n";
+      }
+    } else {
+      reply += "⚠️ Termometreden henüz yeni veri okunamadı.";
+    }
+    sendTelegramReply(chatId, reply);
+    return;
+  }
+
+  // --- COMMAND 3: RAPOR / REPORT / ISTATISTIK ---
+  if (lowerCmd == "rapor" || lowerCmd == "report" || lowerCmd == "istatistik" ||
+      lowerCmd == "ozet" || lowerCmd == "özet") {
+    String reply = "📈 SOĞUK ZİNCİR KAYIT ÖZETİ\n";
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    if (historyCount == 0) {
+      reply += "Hafızada henüz kayıtlı geçmiş veri bulunmuyor.";
+    } else {
+      float minT = 999.0f, maxT = -999.0f, sumT = 0.0f;
+      int violations = 0;
+      int validCount = 0;
+
+      float tMin = cfgMgr.config.normalTempMin;
+      float tMax = cfgMgr.config.normalTempMax;
+
+      int startIdx = (historyCount < HISTORY_SIZE) ? 0 : historyHead;
+      for (int i = 0; i < historyCount; i++) {
+        int idx = (startIdx + i) % HISTORY_SIZE;
+        float t = tempHistory[idx].temp / 10.0f;
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+        sumT += t;
+        validCount++;
+        if (t < tMin || t > tMax) violations++;
+      }
+
+      float avgT = (validCount > 0) ? (sumT / validCount) : 0.0f;
+      reply += "Kayıt Sayısı: " + String(historyCount) + " ölçüm\n";
+      reply += "En Düşük: " + String(minT, 1) + " °C\n";
+      reply += "En Yüksek: " + String(maxT, 1) + " °C\n";
+      reply += "Ortalama: " + String(avgT, 1) + " °C\n";
+      reply += "Limit İhlali: " + String(violations) + " adet\n";
+      reply += "━━━━━━━━━━━━━━━━━━━━\n";
+      if (violations == 0) {
+        reply += "✅ Soğuk zincir standartlarına tam uyumlu.";
+      } else {
+        reply += "⚠️ " + String(violations) + " adet sıcaklık sınırı aşımı kaydedildi!";
+      }
+    }
+    sendTelegramReply(chatId, reply);
+    return;
+  }
+
+  // --- COMMAND 4: LINK / IP / WEB / PORTAL ---
+  if (lowerCmd == "link" || lowerCmd == "ip" || lowerCmd == "web" || lowerCmd == "portal") {
+    IPAddress localIp = WiFi.localIP();
+    String reply = "🌐 CİHAZ ERİŞİM BİLGİLERİ\n";
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    reply += "Wi-Fi Ağı: " + WiFi.SSID() + "\n";
+    reply += "Cihaz IP: " + localIp.toString() + "\n\n";
+    reply += "📄 PDF Raporu (Aynı Wi-Fi ağından):\n";
+    reply += "http://" + localIp.toString() + "/report?range=24h\n\n";
+    reply += "📶 AP Ayar Portalı:\n";
+    reply += "SSID: Thermo_Obs\n";
+    reply += "Şifre: " + cfgMgr.config.apPassword + "\n";
+    reply += "Adres: http://192.168.4.1";
+    sendTelegramReply(chatId, reply);
+    return;
+  }
+
+  // --- COMMAND 5: YARDIM / HELP / START / MENU ---
+  if (lowerCmd == "yardim" || lowerCmd == "yardım" || lowerCmd == "help" ||
+      lowerCmd == "komutlar" || lowerCmd == "start" || lowerCmd == "menu") {
+    String reply = "🤖 THERMO_OBS BOT KOMUTLARI\n";
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    reply += "Aşağıdaki kelimelerden birini yazabilirsiniz:\n\n";
+    reply += "🔹 durum : Anlık sıcaklık, pil, şebeke ve sistem özeti\n";
+    reply += "🔹 sicaklik : Sadece anlık ısı ve limit analizi\n";
+    reply += "🔹 rapor : Kayıtlı verilerin Min/Max/Ortalama analizi\n";
+    reply += "🔹 link : Cihaz IP ve PDF rapor erişim bağlantısı\n";
+    reply += "🔹 yardim : Bu komut yardım menüsü\n";
+    reply += "━━━━━━━━━━━━━━━━━━━━\n";
+    reply += "💡 Komutların başına '/' koyabilir veya direkt kelime olarak yazabilirsiniz.";
+    sendTelegramReply(chatId, reply);
+    return;
+  }
+
+  // --- UNKNOWN COMMAND FALLBACK ---
+  String reply = "❓ '" + cmd + "' komutu anlaşılamadı.\n\n"
+                 "Kullanabileceğiniz komutlar:\n"
+                 "👉 durum\n👉 sicaklik\n👉 rapor\n👉 link\n👉 yardim";
+  sendTelegramReply(chatId, reply);
+}
+
+void processTelegramIncomingMessages() {
+  if (cfgMgr.config.telegramBotToken.length() == 0) return;
+
+  Serial.println("\n--- [ 3. Telegram Bot Inbound Polling ] ---");
+
+  NetworkClientSecure client;
+  client.setInsecure();
+  client.setHandshakeTimeout(10);
+  HTTPClient https;
+
+  String url = "https://api.telegram.org/bot" + cfgMgr.config.telegramBotToken + "/getUpdates";
+  if (lastTelegramUpdateId > 0) {
+    url += "?offset=" + String(lastTelegramUpdateId) + "&limit=5&timeout=0";
+  } else {
+    url += "?offset=-3&limit=3&timeout=0";
+  }
+
+  if (!https.begin(client, url)) {
+    Serial.println("[TG-Bot] ❌ https.begin() failed for getUpdates.");
+    return;
+  }
+
+  https.setTimeout(6000);
+  int httpCode = https.GET();
+  if (httpCode != 200) {
+    Serial.printf("[TG-Bot] ⚠️ getUpdates failed with code: %d\n", httpCode);
+    https.end();
+    return;
+  }
+
+  String payload = https.getString();
+  https.end();
+
+  if (payload.indexOf("\"ok\":true") == -1 || payload.indexOf("\"result\":[]") != -1) {
+    Serial.println("[TG-Bot] 📭 No new messages.");
+    return;
+  }
+
+  Serial.printf("[TG-Bot] 📬 Updates received (%d bytes). Parsing...\n", payload.length());
+
+  int searchPos = 0;
+  int processedCount = 0;
+
+  while (processedCount < 5) {
+    int upPos = payload.indexOf("\"update_id\":", searchPos);
+    if (upPos == -1) break;
+
+    // 1. Extract update_id
+    int upValStart = upPos + 12;
+    int upValEnd = payload.indexOf(',', upValStart);
+    if (upValEnd == -1) upValEnd = payload.indexOf('}', upValStart);
+    if (upValEnd == -1) break;
+
+    long updateId = payload.substring(upValStart, upValEnd).toInt();
+    if (updateId >= lastTelegramUpdateId) {
+      lastTelegramUpdateId = updateId + 1;
+    }
+
+    int nextUpPos = payload.indexOf("\"update_id\":", upValEnd);
+    int itemEnd = (nextUpPos != -1) ? nextUpPos : payload.length();
+
+    // 2. Extract Chat ID (look for "chat":{..."id":...)
+    String chatId = "";
+    int chatPos = payload.indexOf("\"chat\":", upValEnd);
+    if (chatPos != -1 && chatPos < itemEnd) {
+      int idPos = payload.indexOf("\"id\":", chatPos);
+      if (idPos != -1 && idPos < itemEnd) {
+        int idStart = idPos + 5;
+        int idEnd = payload.indexOf(',', idStart);
+        int idEndBrace = payload.indexOf('}', idStart);
+        if (idEnd == -1 || (idEndBrace != -1 && idEndBrace < idEnd)) idEnd = idEndBrace;
+        if (idEnd != -1 && idEnd < itemEnd) {
+          chatId = payload.substring(idStart, idEnd);
+          chatId.trim();
+        }
+      }
+    }
+
+    // 3. Extract Text
+    String msgText = "";
+    int textPos = payload.indexOf("\"text\":\"", upValEnd);
+    if (textPos != -1 && textPos < itemEnd) {
+      int tStart = textPos + 8;
+      int tEnd = tStart;
+      while (tEnd < itemEnd) {
+        if (payload[tEnd] == '"' && payload[tEnd - 1] != '\\') break;
+        tEnd++;
+      }
+      if (tEnd < itemEnd) {
+        msgText = payload.substring(tStart, tEnd);
+        msgText.replace("\\\"", "\"");
+        msgText.replace("\\/", "/");
+      }
+    }
+
+    searchPos = upValEnd;
+
+    if (chatId.length() == 0 || msgText.length() == 0) continue;
+
+    processedCount++;
+    Serial.printf("[TG-Bot] 📩 Incoming message #%d from Chat %s: '%s'\n",
+                  processedCount, chatId.c_str(), msgText.c_str());
+
+    handleTelegramBotCommand(chatId, msgText);
+    delay(100);
+  }
 }
 
 void sendWebhookMessage(String jsonPayload) {
@@ -943,6 +1276,11 @@ void executeSendCycle() {
         }
       }
       lastSlopeTemp = measuredTemp;
+    }
+
+    // --- 3. TELEGRAM BOT INCOMING COMMAND POLLING ---
+    if (!checkMenuAbort()) {
+      processTelegramIncomingMessages();
     }
   } else {
     Serial.println("[CYCLE] ❌ Wi-Fi connection could not be established. Transmission skipped.");
