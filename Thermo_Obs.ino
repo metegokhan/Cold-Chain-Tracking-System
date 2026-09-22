@@ -11,6 +11,7 @@
 #include <LittleFS.h>
 #include <time.h>
 #include <qrcode.h>
+#include <esp_bt.h>
 #include "history_manager.h"
 #include "config_manager.h"
 #include "web_portal.h"
@@ -438,12 +439,19 @@ void startBLEScanForMode() {
   if (pBLEScan == nullptr) {
     Serial.printf("[BLE] Initializing BLE stack (Free Heap before BLE: %u bytes)...\n", ESP.getFreeHeap());
     BLEDevice::init("");
+
+    // Maksimum BLE RF Gücü (+20 dBm = 100 mW)
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P20);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P20);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P20);
+
     pBLEScan = BLEDevice::getScan();
     pBLEScan->setAdvertisedDeviceCallbacks(&s_bleCallbacks, true);
     pBLEScan->setActiveScan(true);
     pBLEScan->setInterval(100);
-    pBLEScan->setWindow(99);
-    Serial.printf("[BLE] BLE scan active (Free Heap: %u bytes, MaxAlloc: %u bytes)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    pBLEScan->setWindow(100); // 100% continuous duty cycle
+    Serial.printf("[BLE] BLE scan active (TX Power: +20 dBm Max, Free Heap: %u bytes, MaxAlloc: %u bytes)\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   }
 }
 
