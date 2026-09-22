@@ -2,6 +2,13 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
+const int MAX_TG_RECIPIENTS = 10;
+
+struct TelegramRecipient {
+  String chatId;
+  String note;
+};
+
 struct AppConfig {
   // AP Portal Password (Persistent NVS)
   String apPassword;
@@ -41,6 +48,7 @@ struct AppConfig {
   String webhookUrl;
   String telegramBotToken;
   String telegramChatId;
+  TelegramRecipient tgRecipients[MAX_TG_RECIPIENTS];
 
   // 4-Point Laboratory Temperature Calibration (2.0°C, 4.0°C, 6.0°C, 8.0°C)
   float calRaw2;         // Raw sensor reading when master reference is 2.0 °C
@@ -113,6 +121,18 @@ public:
     config.webhookUrl = prefs.getString("wh_url", "");
     config.telegramBotToken = prefs.getString("tg_token", "");
     config.telegramChatId = prefs.getString("tg_chat", "");
+
+    for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+      String keyId = "tg_id_" + String(i);
+      String keyNote = "tg_n_" + String(i);
+      config.tgRecipients[i].chatId = prefs.getString(keyId.c_str(), "");
+      config.tgRecipients[i].note = prefs.getString(keyNote.c_str(), "");
+    }
+    // Backward compatibility migration:
+    if (config.tgRecipients[0].chatId.length() == 0 && config.telegramChatId.length() > 0) {
+      config.tgRecipients[0].chatId = config.telegramChatId;
+      config.tgRecipients[0].note = "Primary Chat";
+    }
 
     // 4-Point Calibration
     config.calRaw2 = prefs.getFloat("cal_r2", 2.0f);
@@ -207,7 +227,14 @@ public:
     prefs.putString("gs_url", config.googleScriptUrl);
     prefs.putString("wh_url", config.webhookUrl);
     prefs.putString("tg_token", config.telegramBotToken);
-    prefs.putString("tg_chat", config.telegramChatId);
+    prefs.putString("tg_chat", config.tgRecipients[0].chatId);
+
+    for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+      String keyId = "tg_id_" + String(i);
+      String keyNote = "tg_n_" + String(i);
+      prefs.putString(keyId.c_str(), config.tgRecipients[i].chatId);
+      prefs.putString(keyNote.c_str(), config.tgRecipients[i].note);
+    }
 
     // 4-Point Calibration
     config.calStdDev = calculateStdDev();

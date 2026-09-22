@@ -363,7 +363,7 @@ arduino-cli upload -p COM4 --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionSch
    - **Thermometer Pairing:** Click **🔄 Scan Nearby Thermometers** (5 seconds) and select your target sensor from the discovered list.
    - **Thresholds:** Set standard storage limits (Default: $2.0^\circ\text{C}$ to $8.0^\circ\text{C}$).
    - **4-Point Calibration:** Map sensor readings against a certified master reference at $2.0^\circ\text{C}, 4.0^\circ\text{C}, 6.0^\circ\text{C}, 8.0^\circ\text{C}$ with automatic standard deviation ($\sigma$) calculation and optional security password lock.
-   - **Alert Channels:** Enter your Google Sheets Web App URL, Telegram Bot Token, or Custom Webhook URL.
+   - **Alert Channels:** Enter your Google Sheets Web App URL, Custom Webhook URL, Telegram Bot Token, and up to **10 Telegram Chat IDs with contact descriptions / roles** (supports both individual chat IDs and group chats starting with `-100`).
 5. Click **💾 SAVE ALL & RESTART**. The device saves all parameters to NVS and begins monitoring.
 
 ---

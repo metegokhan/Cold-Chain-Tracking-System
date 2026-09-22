@@ -501,40 +501,82 @@ const char* getWiFiStatusText(wl_status_t status) {
 }
 
 void sendTelegramMessage(String msg) {
-  if (cfgMgr.config.telegramBotToken.length() == 0 || cfgMgr.config.telegramChatId.length() == 0) {
-    Serial.println("[Telegram] ℹ️ Telegram not configured (Token or Chat ID empty in NVS).");
+  if (cfgMgr.config.telegramBotToken.length() == 0) {
+    Serial.println("[Telegram] ℹ️ Telegram not configured (Bot Token empty in NVS).");
     return;
   }
 
-  Serial.println("[Telegram] 📤 Dispatching alert to Telegram...");
-  NetworkClientSecure client;
-  client.setInsecure();
-  HTTPClient https;
-
-  String url = "https://api.telegram.org/bot" + cfgMgr.config.telegramBotToken +
-               "/sendMessage?chat_id=" + cfgMgr.config.telegramChatId +
-               "&text=" + urlEncode(msg);
-
-  if (https.begin(client, url)) {
-    https.setTimeout(10000);
-    unsigned long tStart = millis();
-    int code = https.GET();
-    unsigned long dur = millis() - tStart;
-
-    if (code > 0) {
-      Serial.printf("[Telegram] ✅ HTTP Response: %d (took %lu ms)\n", code, dur);
-      if (code != 200) {
-        String resp = https.getString();
-        Serial.printf("[Telegram] ⚠️ Telegram API Error Body: %s\n", resp.c_str());
-      }
-    } else {
-      Serial.printf("[Telegram] ❌ Connection failed! Error: %s (code %d, took %lu ms)\n",
-                    https.errorToString(code).c_str(), code, dur);
-    }
-    https.end();
-  } else {
-    Serial.println("[Telegram] ❌ https.begin() failed! Cannot initialize TLS connection to api.telegram.org");
+  // Count active recipients
+  int activeCount = 0;
+  for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+    if (cfgMgr.config.tgRecipients[i].chatId.length() > 0) activeCount++;
   }
+
+  // Fallback to legacy telegramChatId if array is empty
+  if (activeCount == 0 && cfgMgr.config.telegramChatId.length() > 0) {
+    cfgMgr.config.tgRecipients[0].chatId = cfgMgr.config.telegramChatId;
+    cfgMgr.config.tgRecipients[0].note = "Primary";
+    activeCount = 1;
+  }
+
+  if (activeCount == 0) {
+    Serial.println("[Telegram] ℹ️ No Telegram Chat IDs configured.");
+    return;
+  }
+
+  Serial.printf("[Telegram] 📤 Dispatching alert broadcast to %d recipient(s)...\n", activeCount);
+  String encodedMsg = urlEncode(msg);
+  int sentSuccess = 0;
+  int currentIdx = 0;
+
+  for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+    String chatId = cfgMgr.config.tgRecipients[i].chatId;
+    chatId.trim();
+    if (chatId.length() == 0) continue;
+    currentIdx++;
+
+    String note = cfgMgr.config.tgRecipients[i].note;
+    note.trim();
+    if (note.length() == 0) note = "Recipient #" + String(i + 1);
+
+    Serial.printf("[Telegram] ➡️ [%d/%d] Sending to: '%s' (ID: %s)...\n",
+                  currentIdx, activeCount, note.c_str(), chatId.c_str());
+
+    NetworkClientSecure client;
+    client.setInsecure();
+    client.setHandshakeTimeout(10);
+    HTTPClient https;
+
+    String url = "https://api.telegram.org/bot" + cfgMgr.config.telegramBotToken +
+                 "/sendMessage?chat_id=" + chatId +
+                 "&text=" + encodedMsg;
+
+    if (https.begin(client, url)) {
+      https.setTimeout(8000);
+      unsigned long tStart = millis();
+      int code = https.GET();
+      unsigned long dur = millis() - tStart;
+
+      if (code == 200) {
+        sentSuccess++;
+        Serial.printf("[Telegram] ✅ Sent to '%s' (took %lu ms)\n", note.c_str(), dur);
+      } else {
+        Serial.printf("[Telegram] ⚠️ Send to '%s' failed! Code: %d (%s, took %lu ms)\n",
+                      note.c_str(), code, https.errorToString(code).c_str(), dur);
+        if (code > 0) {
+          String resp = https.getString();
+          Serial.printf("[Telegram] 🔍 Response: %s\n", resp.c_str());
+        }
+      }
+      https.end();
+    } else {
+      Serial.printf("[Telegram] ❌ https.begin() failed for '%s'\n", note.c_str());
+    }
+
+    if (currentIdx < activeCount) delay(120);
+  }
+
+  Serial.printf("[Telegram] 🏁 Broadcast complete: %d/%d recipients delivered.\n", sentSuccess, activeCount);
 }
 
 void sendWebhookMessage(String jsonPayload) {

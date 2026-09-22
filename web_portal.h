@@ -213,10 +213,27 @@ public:
     html += "<input type=\"text\" name=\"gs_url\" value=\"" + cfgMgr.config.googleScriptUrl + "\">";
     html += "<label>Custom Webhook URL:</label>";
     html += "<input type=\"text\" name=\"wh_url\" value=\"" + cfgMgr.config.webhookUrl + "\">";
+    
+    html += "<h3 style=\"margin-top:20px;margin-bottom:6px;color:#1a73e8;font-size:15px;border-bottom:1px solid #e8f0fe;padding-bottom:5px;\">✈️ Telegram Alert Broadcast (Up to 10 Recipients)</h3>";
     html += "<label>Telegram Bot Token:</label>";
-    html += "<input type=\"text\" name=\"tg_token\" value=\"" + cfgMgr.config.telegramBotToken + "\">";
-    html += "<label>Telegram Chat ID:</label>";
-    html += "<input type=\"text\" name=\"tg_chat\" value=\"" + cfgMgr.config.telegramChatId + "\">";
+    html += "<input type=\"text\" name=\"tg_token\" placeholder=\"123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ\" value=\"" + cfgMgr.config.telegramBotToken + "\">";
+    
+    html += "<p style=\"font-size:12px;color:#5f6368;margin:8px 0 10px;\">Add individual Chat IDs or Group IDs (e.g. <code>-100xxxxxxxxxx</code>). Include a descriptive contact name or duty role next to each ID.</p>";
+    
+    html += "<table style=\"width:100%;border-collapse:collapse;margin-top:6px;\">";
+    html += "<thead><tr style=\"background:#f1f3f4;font-size:12px;color:#444;\"><th style=\"padding:6px 8px;width:32px;text-align:center;\">#</th><th style=\"padding:6px 8px;width:45%;\">Telegram Chat ID</th><th style=\"padding:6px 8px;width:55%;\">Contact / Role Description</th></tr></thead>";
+    html += "<tbody>";
+    for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+      String idVal = cfgMgr.config.tgRecipients[i].chatId;
+      String noteVal = cfgMgr.config.tgRecipients[i].note;
+      String rowBg = (i % 2 == 0) ? "#ffffff" : "#fbfbfb";
+      html += "<tr style=\"background:" + rowBg + ";border-bottom:1px solid #e8eaed;\">";
+      html += "<td style=\"padding:6px 4px;text-align:center;font-weight:bold;color:#70757a;font-size:12px;\">" + String(i + 1) + "</td>";
+      html += "<td style=\"padding:4px 6px;\"><input type=\"text\" style=\"padding:7px 9px;font-size:13px;\" name=\"tg_id_" + String(i) + "\" placeholder=\"" + (i == 0 ? "e.g. 123456789 (Primary)" : "Chat ID " + String(i + 1)) + "\" value=\"" + idVal + "\"></td>";
+      html += "<td style=\"padding:4px 6px;\"><input type=\"text\" style=\"padding:7px 9px;font-size:13px;\" name=\"tg_n_" + String(i) + "\" placeholder=\"" + (i == 0 ? "e.g. Dr. Ahmet / Eczacı" : "e.g. Gece Nöbetçisi") + "\" value=\"" + noteVal + "\"></td>";
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
     html += "</div>";
     html += "<div class=\"card\">";
     html += "<h2>🎯 7. 4-Point Temperature Calibration & Security Lock</h2>";
@@ -508,7 +525,20 @@ public:
       if (server.hasArg("gs_url")) cfgMgr.config.googleScriptUrl = server.arg("gs_url");
       if (server.hasArg("wh_url")) cfgMgr.config.webhookUrl = server.arg("wh_url");
       if (server.hasArg("tg_token")) cfgMgr.config.telegramBotToken = server.arg("tg_token");
-      if (server.hasArg("tg_chat")) cfgMgr.config.telegramChatId = server.arg("tg_chat");
+
+      for (int i = 0; i < MAX_TG_RECIPIENTS; i++) {
+        String argId = "tg_id_" + String(i);
+        String argNote = "tg_n_" + String(i);
+        if (server.hasArg(argId)) {
+          cfgMgr.config.tgRecipients[i].chatId = server.arg(argId);
+          cfgMgr.config.tgRecipients[i].chatId.trim();
+        }
+        if (server.hasArg(argNote)) {
+          cfgMgr.config.tgRecipients[i].note = server.arg(argNote);
+          cfgMgr.config.tgRecipients[i].note.trim();
+        }
+      }
+      cfgMgr.config.telegramChatId = cfgMgr.config.tgRecipients[0].chatId;
 
       // Calibration Authorization & Update
       bool canUpdateCal = false;
