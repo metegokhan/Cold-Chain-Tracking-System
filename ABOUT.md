@@ -106,6 +106,7 @@ The UI uses a single physical push-button (`GPIO 9`) connected with an internal 
   - Instantly advances to the next of **8 informative OLED screens** (Temperature, Humidity, Battery, RSSI, 30-day Min, 30-day Max, Wi-Fi details, BLE details).
   - Pauses background BLE scanning while browsing to eliminate display stutter, flicker, and lag.
   - Returns to the primary screen after 10 seconds of user inactivity.
+  - *(See live hardware photo in [assets/photo.jpeg](assets/photo.jpeg) and button cycling demonstration in [assets/video.mp4](assets/video.mp4)).*
 - **Long Press (>= 5.0 Seconds):**
   - Fills an on-screen animated progress bar and enters the **Configuration Menu**.
   - Provides access to WPS pairing, the standalone SoftAP Web Portal (`192.168.4.1`), and BLE Auto-Discovery.

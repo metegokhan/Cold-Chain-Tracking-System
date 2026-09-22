@@ -14,6 +14,21 @@ Built around the ultra-compact **ESP32-C3 0.42" OLED development board** (RISC-V
 
 ---
 
+## 📸 Live Hardware Showcase & Operation Demonstration
+
+Field deployment of Thermo_Obs monitoring a cold-storage unit:
+
+| 📟 ESP32-C3 Receiver & OLED Display Unit | ❄️ Real-World Vaccine Storage & Live Walkthrough |
+| :---: | :---: |
+| <a href="assets/photo.jpeg"><img src="assets/photo.jpeg" alt="ESP32-C3 0.42 OLED Display Unit" width="360"/></a> | <a href="assets/video.mp4"><img src="assets/video_thumbnail.jpg" alt="Thermo_Obs Live Demo Video" width="360"/><br/>▶️ **Watch Full Operation Video (`video.mp4`)**</a> |
+| **Active Telemetry:** Real-time display showing 4.8°C from BLE sensor `ATC_62CD30` | **Field Walkthrough:** Single-button UI navigation & sensor placed in vaccine refrigerator |
+
+> 📹 **Video Demonstration Highlights ([`assets/video.mp4`](assets/video.mp4)):**
+> 1. **OLED Screen Cycling:** Demonstrates one-button sequential switching through all 8 real-time screens (Temperature, Humidity, Battery %, Signal RSSI, 30-day Min/Max, Wi-Fi info, Sensor MAC).
+> 2. **Cold-Chain Refrigerator Deployment:** Shows the custom-flashed Xiaomi Mijia BLE thermometer deployed inside the medical cold-chain refrigerator directly alongside vaccine supplies and certified Fridge-tag monitoring equipment.
+
+---
+
 ## 🗺️ System Architecture & Operation Workflow
 
 Thermo_Obs monitors cold-chain conditions through a non-blocking state machine balancing BLE radio polling, dual-mode Wi-Fi failover, mains power monitoring, local 30-day wear-leveled flash persistence, and instant emergency alerts.
@@ -106,7 +121,7 @@ The entire device interface is operated using a **single physical button (BOOT b
 
 ### 2. OLED Display Mockups (0.42" SSD1306 - 72x40 Visible Pixel Window)
 
-In normal operation mode, a **short press of the BOOT button** advances to the next information screen. Active background RF scanning is temporarily halted during user navigation to provide instant, flicker-free readability. The interface automatically returns to Screen 1 after 10 seconds of inactivity.
+In normal operation mode, a **short press of the BOOT button** advances to the next information screen. Active background RF scanning is temporarily halted during user navigation to provide instant, flicker-free readability. The interface automatically returns to Screen 1 after 10 seconds of inactivity. *(See real physical hardware photo in [assets/photo.jpeg](assets/photo.jpeg) and live button navigation in [assets/video.mp4](assets/video.mp4)).*
 
 ```text
 Screen 1: Primary Temperature & Link    Screen 2: Relative Humidity
