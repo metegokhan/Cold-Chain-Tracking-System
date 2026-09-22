@@ -141,7 +141,7 @@ public:
     html += "  <rect x=\"745\" y=\"335\" width=\"230\" height=\"30\" rx=\"10\" fill=\"url(#purpleGrad)\"/>";
     html += "  <text x=\"860\" y=\"355\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"bold\" fill=\"#fff\">📄 Local Web Audit Portal</text>";
     html += "  <text x=\"760\" y=\"385\" font-size=\"11\" font-weight=\"bold\" fill=\"#4a148c\">• View / Print PDF (/report):</text>";
-    html += "  <text x=\"770\" y=\"402\" font-size=\"10\" fill=\"#5f6368\">Dynamic Chart.js time-series curve</text>";
+    html += "  <text x=\"770\" y=\"402\" font-size=\"10\" fill=\"#5f6368\">100% Offline SVG time-series curve</text>";
     html += "  <text x=\"770\" y=\"417\" font-size=\"10\" fill=\"#5f6368\">KPI cards &amp; excursion breach table</text>";
     html += "  <text x=\"770\" y=\"432\" font-size=\"10\" fill=\"#5f6368\">A4 print-ready official report</text>";
     html += "  <text x=\"760\" y=\"455\" font-size=\"11\" font-weight=\"bold\" fill=\"#4a148c\">• Raw CSV Export (/export_csv):</text>";
@@ -203,7 +203,7 @@ public:
     html += "  <tr><td><strong>U8g2</strong></td><td>olikraus (<a href=\"https://github.com/olikraus/u8g2\" target=\"_blank\">GitHub</a>)</td><td>Monochrome OLED graphics & font rendering engine</td></tr>";
     html += "  <tr><td><strong>LittleFS</strong></td><td>Espressif Systems</td><td>Flash wear-leveling persistent file storage</td></tr>";
     html += "  <tr><td><strong>BLE & WiFi</strong></td><td>Espressif Systems</td><td>Bluetooth Low Energy scanner & dual-mode Wi-Fi stack</td></tr>";
-    html += "  <tr><td><strong>Chart.js</strong></td><td>Open Source (<a href=\"https://www.chartjs.org/\" target=\"_blank\">Chart.js CDN</a>)</td><td>Client-side dynamic time-series charts on audit reports</td></tr>";
+    html += "  <tr><td><strong>Vector SVG Engine</strong></td><td>Built-in Native</td><td>100% Offline vector time-series chart with zero CDN dependencies</td></tr>";
     html += "  </tbody></table>";
     html += "</div>";
 

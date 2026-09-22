@@ -63,7 +63,7 @@ flowchart TD
     subgraph BACKGROUND ["4. Independent Background Engines"]
         Timer5m["Every 5 Minutes (300,000 ms)"] --> AddRamSample["Add Sample to RAM Rolling Buffer<br/>(Timestamp + Temp * 10 | 8,640 slots = 30 Days)"]
         Timer30m["Every 30 Minutes (1,800,000 ms)"] --> FlushFlash["Write History to LittleFS Flash<br/>(Wear-Leveled /history.bin File)"]
-        WebReq["Client Accesses Web Portal"] --> ServeReport["Serve Web Endpoints:<br/>• /report: Dynamic PDF Audit Report (Chart.js)<br/>• /export_csv: Raw 30-Day CSV Download<br/>• /about: Onboard Hardware Manual & SVG"]
+        WebReq["Client Accesses Web Portal"] --> ServeReport["Serve Web Endpoints:<br/>• /report: Dynamic PDF Audit Report (Native SVG)<br/>• /export_csv: Raw 30-Day CSV Download<br/>• /about: Onboard Hardware Manual & SVG"]
     end
 ```
 

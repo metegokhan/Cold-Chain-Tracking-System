@@ -109,6 +109,8 @@ unsigned long lastBlePacketReceivedTime = 0;
 // Connectivity Flags
 bool wifiConnectedStatus = false;
 bool bleConnectedStatus = false;
+bool lastWiFiSuccess = false;
+String lastAssignedIp = "-";
 
 // 30 Days Min/Max History Buffer (8640 samples: 30 days * 24 hours * 12 samples/hour @ 5 min intervals)
 TempRecord tempHistory[HISTORY_SIZE];
@@ -608,6 +610,8 @@ bool connectToAvailableWiFi() {
 
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
+      lastWiFiSuccess = true;
+      lastAssignedIp = WiFi.localIP().toString();
       // Inject Google 8.8.8.8 and Cloudflare 1.1.1.1 DNS servers to avoid router DNS lockups
       IPAddress dns1(8, 8, 8, 8);
       IPAddress dns2(1, 1, 1, 1);
@@ -649,6 +653,8 @@ bool connectToAvailableWiFi() {
 
     if (WiFi.status() == WL_CONNECTED) {
       wifiConnectedStatus = true;
+      lastWiFiSuccess = true;
+      lastAssignedIp = WiFi.localIP().toString();
       IPAddress dns1(8, 8, 8, 8);
       IPAddress dns2(1, 1, 1, 1);
       WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(), dns1, dns2);
@@ -668,6 +674,7 @@ bool connectToAvailableWiFi() {
   Serial.println("[WIFI] ❌ All Wi-Fi connection attempts failed.");
   Serial.println("[WIFI] ==========================================================\n");
   wifiConnectedStatus = false;
+  lastWiFiSuccess = false;
   return false;
 }
 
@@ -902,6 +909,7 @@ void executeSendCycle() {
   Serial.println("[CYCLE] Disconnecting Wi-Fi and returning to low-power BLE mode...");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
+  wifiConnectedStatus = false;
   Serial.printf("[CYCLE] Free Heap at end of cycle: %u bytes\n", ESP.getFreeHeap());
   Serial.println("################### [ SEND CYCLE FINISHED ] ###################\n");
 }
@@ -951,7 +959,7 @@ void drawNormalScreens() {
     bleConnectedStatus = false;
   }
 
-  bool hasError = (!wifiConnectedStatus || !bleConnectedStatus || (!isTimeSynced && ntpFailedWarning));
+  bool hasError = (!lastWiFiSuccess || !bleConnectedStatus || (!isTimeSynced && ntpFailedWarning));
   if (!isBrowsingScreens && hasError && currentInfoScr == SCR_MAIN_TEMP) {
     unsigned long popCycle = millis() % 6000;
     if (popCycle >= 3500) {
@@ -960,7 +968,7 @@ void drawNormalScreens() {
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 16, "! WARNING !");
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 28, "Thermometer");
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 37, "No Signal");
-      } else if (!wifiConnectedStatus) {
+      } else if (!lastWiFiSuccess) {
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 16, "! WARNING !");
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 28, "Wi-Fi");
         u8g2.drawStr(X_OFFSET + 6, Y_OFFSET + 37, "Disconnected");
@@ -981,7 +989,7 @@ void drawNormalScreens() {
       String dName = (cfgMgr.config.bleTargetName.length() > 0) ? cfgMgr.config.bleTargetName : measuredDeviceName;
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, dName.c_str());
 
-      String stat = "w:" + String(wifiConnectedStatus ? "V" : "X") + " b:" + String(bleConnectedStatus ? "V" : "X");
+      String stat = "w:" + String(lastWiFiSuccess ? "V" : "X") + " b:" + String(bleConnectedStatus ? "V" : "X");
       if (!isTimeSynced) stat += " !T";
       u8g2.setFont(u8g2_font_4x6_tf);
       u8g2.drawStr(X_OFFSET + 32, Y_OFFSET + 8, stat.c_str());
@@ -1098,8 +1106,24 @@ void drawNormalScreens() {
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 8, "WIFI INFO");
       u8g2.setFont(u8g2_font_4x6_tf);
       u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 18, ("SSID: " + cfgMgr.config.wifiSsid).c_str());
-      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 28, ("State: " + String(wifiConnectedStatus ? "Connected" : "No Conn")).c_str());
-      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 37, ("IP: " + (wifiConnectedStatus ? WiFi.localIP().toString() : "-")).c_str());
+
+      String stateStr = "No Conn";
+      if (WiFi.status() == WL_CONNECTED) {
+        stateStr = "Connected";
+      } else if (lastWiFiSuccess) {
+        stateStr = "Standby (OK)";
+      } else {
+        stateStr = "Disconnected";
+      }
+      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 28, ("State: " + stateStr).c_str());
+
+      String ipStr = "-";
+      if (WiFi.status() == WL_CONNECTED && WiFi.localIP().toString() != "0.0.0.0") {
+        ipStr = WiFi.localIP().toString();
+      } else if (lastAssignedIp != "-" && lastAssignedIp != "0.0.0.0") {
+        ipStr = lastAssignedIp;
+      }
+      u8g2.drawStr(X_OFFSET + 4, Y_OFFSET + 37, ("IP: " + ipStr).c_str());
       break;
     }
 
@@ -1252,8 +1276,8 @@ void loop() {
   int rawPower = digitalRead(cfgMgr.config.powerDetectPin);
   isPowerOutage = (cfgMgr.config.powerPinActiveLow == 1) ? (rawPower == LOW) : (rawPower == HIGH);
 
-  // 1) Add sample to RAM buffer every 5 minutes (300,000 ms)
-  if (everReceivedAnyData && (millis() - lastHistorySampleTime >= 300000UL)) {
+  // 1) Add sample to RAM buffer immediately on first BLE packet, then every 5 minutes (300,000 ms)
+  if (everReceivedAnyData && (lastHistorySampleTime == 0 || millis() - lastHistorySampleTime >= 300000UL)) {
     lastHistorySampleTime = millis();
     addTempSample(lastDispTemp);
   }

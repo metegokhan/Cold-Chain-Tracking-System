@@ -230,6 +230,14 @@ public:
       float t = tempHistory[idx].temp / 10.0f;
       uint32_t ts = tempHistory[idx].timestamp;
 
+      if (ts == 0) {
+        uint32_t nowSec = (uint32_t)time(nullptr);
+        if (nowSec > 1000000000UL) {
+          ts = nowSec - (uint32_t)(historyCount - 1 - i) * 300UL;
+          tempHistory[idx].timestamp = ts;
+        }
+      }
+
       if (cutoffTs > 0 && ts < cutoffTs) continue;
 
       if (t <= 2.0f) {
@@ -369,6 +377,144 @@ public:
     return html;
   }
 
+  static String generateSvgChart(const std::vector<int>& sampleIndices, const RangeConfig* cfg) {
+    String svg = "";
+    svg.reserve(4096);
+
+    const float left = 55.0f;
+    const float right = 835.0f;
+    const float top = 25.0f;
+    const float bottom = 225.0f;
+    const float plotW = right - left; // 780
+    const float plotH = bottom - top; // 200
+
+    if (sampleIndices.empty()) {
+      svg += "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 860 270\" width=\"100%\" height=\"270\" style=\"background:#fff;border-radius:8px;\">";
+      svg += "<rect x=\"55\" y=\"25\" width=\"780\" height=\"200\" fill=\"#f8fafd\" stroke=\"#dadce0\" stroke-width=\"1\" rx=\"6\"/>";
+      svg += "<text x=\"445\" y=\"115\" font-size=\"15\" fill=\"#1a73e8\" font-weight=\"bold\" text-anchor=\"middle\" font-family=\"sans-serif\">📊 No Temperature Samples in Selected Window</text>";
+      svg += "<text x=\"445\" y=\"142\" font-size=\"12\" fill=\"#5f6368\" text-anchor=\"middle\" font-family=\"sans-serif\">Awaiting periodic telemetry recordings from thermometer. Readings appear every 5 minutes.</text>";
+      svg += "</svg>";
+      return svg;
+    }
+
+    float dataMin = 999.0f, dataMax = -999.0f;
+    for (int idx : sampleIndices) {
+      float t = tempHistory[idx].temp / 10.0f;
+      if (t < dataMin) dataMin = t;
+      if (t > dataMax) dataMax = t;
+    }
+
+    float yMin = 0.0f;
+    float yMax = 10.0f;
+    if (dataMin < 0.0f) yMin = floor(dataMin) - 1.0f;
+    if (dataMax > 10.0f) yMax = ceil(dataMax) + 1.0f;
+    float yRange = yMax - yMin;
+    if (yRange <= 0.01f) yRange = 10.0f;
+
+    auto getY = [&](float val) -> float {
+      return top + plotH * (yMax - val) / yRange;
+    };
+
+    svg += "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 860 270\" width=\"100%\" height=\"270\" style=\"background:#fff;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;\">";
+    svg += "<defs>";
+    svg += "<linearGradient id=\"tempAreaGrad\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">";
+    svg += "<stop offset=\"0%\" stop-color=\"#1a73e8\" stop-opacity=\"0.30\"/>";
+    svg += "<stop offset=\"100%\" stop-color=\"#1a73e8\" stop-opacity=\"0.02\"/>";
+    svg += "</linearGradient>";
+    svg += "</defs>";
+
+    // Safe Band (+2.0 C to +8.0 C)
+    float ySafeLow = getY(2.0f);
+    float ySafeHigh = getY(8.0f);
+    float safeH = ySafeLow - ySafeHigh;
+    if (safeH < 0) safeH = -safeH;
+    svg += "<rect x=\"55\" y=\"" + String(ySafeHigh, 1) + "\" width=\"780\" height=\"" + String(safeH, 1) + "\" fill=\"#e6f4ea\" opacity=\"0.75\"/>";
+    svg += "<text x=\"62\" y=\"" + String(ySafeHigh + 13, 1) + "\" font-size=\"10\" fill=\"#137333\" font-weight=\"bold\">SAFE COLD-CHAIN BAND (+2.0&deg;C to +8.0&deg;C)</text>";
+
+    // Grid lines and Y-axis text
+    for (float g = yMin; g <= yMax + 0.01f; g += 2.0f) {
+      float gy = getY(g);
+      svg += "<line x1=\"55\" y1=\"" + String(gy, 1) + "\" x2=\"835\" y2=\"" + String(gy, 1) + "\" stroke=\"#e8eaed\" stroke-width=\"1\"/>";
+      char yBuf[16];
+      snprintf(yBuf, sizeof(yBuf), "%.0f&deg;C", g);
+      svg += "<text x=\"48\" y=\"" + String(gy + 4, 1) + "\" font-size=\"10.5\" fill=\"#5f6368\" text-anchor=\"end\">" + String(yBuf) + "</text>";
+    }
+
+    // Upper and Lower Limit Threshold Lines
+    svg += "<line x1=\"55\" y1=\"" + String(ySafeHigh, 1) + "\" x2=\"835\" y2=\"" + String(ySafeHigh, 1) + "\" stroke=\"#d93025\" stroke-width=\"1.5\" stroke-dasharray=\"4,4\"/>";
+    svg += "<text x=\"830\" y=\"" + String(ySafeHigh - 4, 1) + "\" font-size=\"10\" fill=\"#d93025\" font-weight=\"bold\" text-anchor=\"end\">MAX LIMIT (+8.0&deg;C)</text>";
+
+    svg += "<line x1=\"55\" y1=\"" + String(ySafeLow, 1) + "\" x2=\"835\" y2=\"" + String(ySafeLow, 1) + "\" stroke=\"#1a73e8\" stroke-width=\"1.5\" stroke-dasharray=\"4,4\"/>";
+    svg += "<text x=\"830\" y=\"" + String(ySafeLow + 12, 1) + "\" font-size=\"10\" fill=\"#1a73e8\" font-weight=\"bold\" text-anchor=\"end\">MIN LIMIT (+2.0&deg;C)</text>";
+
+    // Collect display points
+    struct SvgPt { float x, y, t; uint32_t ts; };
+    std::vector<SvgPt> pts;
+    for (size_t k = 0; k < sampleIndices.size(); k += cfg->displayStep) {
+      int idx = sampleIndices[k];
+      float t = tempHistory[idx].temp / 10.0f;
+      pts.push_back({0.0f, getY(t), t, tempHistory[idx].timestamp});
+    }
+    if (!sampleIndices.empty() && (sampleIndices.size() - 1) % cfg->displayStep != 0) {
+      int idx = sampleIndices.back();
+      float t = tempHistory[idx].temp / 10.0f;
+      pts.push_back({0.0f, getY(t), t, tempHistory[idx].timestamp});
+    }
+
+    size_t count = pts.size();
+    for (size_t i = 0; i < count; i++) {
+      pts[i].x = (count == 1) ? (left + plotW / 2.0f) : (left + plotW * (float)i / (float)(count - 1));
+    }
+
+    // Polygon for gradient area fill
+    if (count > 1) {
+      svg += "<polygon points=\"";
+      svg += String(pts[0].x, 1) + "," + String(bottom, 1) + " ";
+      for (size_t i = 0; i < count; i++) {
+        svg += String(pts[i].x, 1) + "," + String(pts[i].y, 1) + " ";
+      }
+      svg += String(pts[count - 1].x, 1) + "," + String(bottom, 1) + "\" fill=\"url(#tempAreaGrad)\"/>";
+    }
+
+    // Polyline for line stroke
+    if (count > 1) {
+      svg += "<polyline points=\"";
+      for (size_t i = 0; i < count; i++) {
+        svg += String(pts[i].x, 1) + "," + String(pts[i].y, 1) + (i + 1 < count ? " " : "");
+      }
+      svg += "\" fill=\"none\" stroke=\"#1a73e8\" stroke-width=\"2.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>";
+    }
+
+    // Data points dots
+    for (size_t i = 0; i < count; i++) {
+      String dotColor = "#34a853"; // Normal safe
+      if (pts[i].t >= 8.0f) dotColor = "#d93025";
+      else if (pts[i].t <= 2.0f) dotColor = "#1a73e8";
+
+      if (count <= 70 || pts[i].t >= 8.0f || pts[i].t <= 2.0f) {
+        svg += "<circle cx=\"" + String(pts[i].x, 1) + "\" cy=\"" + String(pts[i].y, 1) + "\" r=\"3.5\" fill=\"" + dotColor + "\" stroke=\"#ffffff\" stroke-width=\"1.5\">";
+        svg += "<title>" + formatTimestampWithSec(pts[i].ts) + ": " + String(pts[i].t, 1) + " &deg;C</title>";
+        svg += "</circle>";
+      }
+    }
+
+    // Border around plot area
+    svg += "<rect x=\"55\" y=\"25\" width=\"780\" height=\"200\" fill=\"none\" stroke=\"#dadce0\" stroke-width=\"1\"/>";
+
+    // X-Axis Time Labels
+    if (count > 0) {
+      size_t numLabels = count < 7 ? count : 6;
+      for (size_t l = 0; l < numLabels; l++) {
+        size_t idx = (numLabels == 1) ? 0 : (l * (count - 1) / (numLabels - 1));
+        svg += "<text x=\"" + String(pts[idx].x, 1) + "\" y=\"248\" font-size=\"10.5\" fill=\"#5f6368\" text-anchor=\"middle\">" + formatTimestamp(pts[idx].ts) + "</text>";
+        svg += "<line x1=\"" + String(pts[idx].x, 1) + "\" y1=\"225\" x2=\"" + String(pts[idx].x, 1) + "\" y2=\"230\" stroke=\"#dadce0\" stroke-width=\"1\"/>";
+      }
+    }
+
+    svg += "</svg>";
+    return svg;
+  }
+
   static String buildPdfReportHtml(const String& rangeKey = "24h") {
     const RangeConfig* cfg = getRangeConfig(rangeKey);
 
@@ -401,6 +547,12 @@ public:
       int idx = (historyHead - historyCount + i + HISTORY_SIZE) % HISTORY_SIZE;
       if (tempHistory[idx].temp <= -9990) continue; // Unsampled slot
       uint32_t ts = tempHistory[idx].timestamp;
+
+      if (ts == 0 && hasRealTime) {
+        ts = nowEpoch - (uint32_t)(historyCount - 1 - i) * 300UL;
+        tempHistory[idx].timestamp = ts;
+      }
+
       if (hasRealTime && ts < cutoffTs) continue;
 
       sampleIndices.push_back(idx);
@@ -446,7 +598,6 @@ public:
 
     String html = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">";
     html += "<title>Cold Chain Audit Report (" + String(cfg->label) + ")</title>";
-    html += "<script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>";
     html += "<style>";
     html += "@page { size: A4 portrait; margin: 12mm; }";
     html += "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #202124; background: #f8f9fa; margin: 0; padding: 15px; }";
@@ -474,7 +625,7 @@ public:
     html += ".kpi-val { font-size: 22px; font-weight: bold; margin: 5px 0; }";
     html += ".kpi-lbl { font-size: 11px; font-weight: bold; text-transform: uppercase; color: #5f6368; }";
     html += ".kpi-sub { font-size: 11px; color: #70757a; }";
-    html += ".chart-box { border: 1px solid #dadce0; border-radius: 8px; padding: 15px; margin-bottom: 20px; background: #fff; height: 320px; }";
+    html += ".chart-box { border: 1px solid #dadce0; border-radius: 8px; padding: 10px; margin-bottom: 20px; background: #fff; overflow-x: auto; }";
     html += ".sec-title { font-size: 16px; font-weight: bold; margin: 20px 0 10px 0; color: #202124; border-bottom: 1px solid #dadce0; padding-bottom: 5px; }";
     html += "table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }";
     html += "th, td { border: 1px solid #dadce0; padding: 8px 10px; text-align: left; }";
@@ -568,7 +719,7 @@ public:
     // Chart Box
     html += "<div class=\"sec-title\">📈 Temperature Trend & Stability Profile (Visualized: " + String(cfg->displayFreqText) + " Intervals)</div>";
     html += "<div class=\"chart-box\">";
-    html += "  <canvas id=\"tempChart\"></canvas>";
+    html += generateSvgChart(sampleIndices, cfg);
     html += "</div>";
 
     // Violation Table
@@ -635,21 +786,6 @@ public:
     snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d6); html += "<td>" + String(offBuf) + "</td>";
     snprintf(offBuf, sizeof(offBuf), "%+.2f &deg;C", d8); html += "<td>" + String(offBuf) + "</td></tr>";
     html += "</tbody></table>";
-
-    // Chart.js
-    html += "<script>";
-    html += "const labels = []; const temps = [];";
-    for (size_t k = 0; k < sampleIndices.size(); k += cfg->displayStep) {
-      int idx = sampleIndices[k];
-      html += "labels.push('" + formatTimestamp(tempHistory[idx].timestamp) + "'); temps.push(" + String(tempHistory[idx].temp / 10.0f, 1) + ");";
-    }
-    if (!sampleIndices.empty() && (sampleIndices.size() - 1) % cfg->displayStep != 0) {
-      int lastIdx = sampleIndices.back();
-      html += "labels.push('" + formatTimestamp(tempHistory[lastIdx].timestamp) + "'); temps.push(" + String(tempHistory[lastIdx].temp / 10.0f, 1) + ");";
-    }
-    html += "const ctx = document.getElementById('tempChart').getContext('2d');";
-    html += "new Chart(ctx, { type: 'line', data: { labels: labels, datasets: [{ label: 'Temperature (C) - " + String(cfg->displayFreqText) + " intervals', data: temps, borderColor: '#1a73e8', backgroundColor: 'rgba(26, 115, 232, 0.05)', borderWidth: 1.5, pointRadius: " + String(sampleIndices.size() / cfg->displayStep <= 50 ? "3" : "0") + ", fill: true, tension: 0.1 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { title: { display: true, text: 'Temperature (C)' }, suggestedMin: 0, suggestedMax: 10 }, x: { ticks: { maxTicksLimit: 12 } } } } });";
-    html += "</script>";
 
     html += "<div class=\"watermark\">🛡️ AUTHENTIC COLD-CHAIN AUDIT &bull; WINDOW: " + String(cfg->label) + " &bull; HARDWARE MAC: " + getDeviceHardwareMac() + " &bull; SHA-256: " + hashStr.substring(0, 16) + "...</div>";
     html += "</div></body></html>";

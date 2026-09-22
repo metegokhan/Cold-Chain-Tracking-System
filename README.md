@@ -82,7 +82,7 @@ flowchart TD
     subgraph BACKGROUND ["4. Independent Background Engines"]
         Timer5m["Every 5 Minutes (300,000 ms)"] --> AddRamSample["Add Sample to RAM Rolling Buffer<br/>(Timestamp + Temp * 10 | 8,640 slots = 30 Days)"]
         Timer30m["Every 30 Minutes (1,800,000 ms)"] --> FlushFlash["Write History to LittleFS Flash<br/>(Wear-Leveled /history.bin File)"]
-        WebReq["Client Accesses Web Portal"] --> ServeReport["Serve Web Endpoints:<br/>• /report: Dynamic PDF Audit Report (Chart.js)<br/>• /export_csv: Raw 30-Day CSV Download<br/>• /about: Onboard Hardware Manual & SVG"]
+        WebReq["Client Accesses Web Portal"] --> ServeReport["Serve Web Endpoints:<br/>• /report: Dynamic PDF Audit Report (Native SVG)<br/>• /export_csv: Raw 30-Day CSV Download<br/>• /about: Onboard Hardware Manual & SVG"]
     end
 ```
 </details>
@@ -313,7 +313,7 @@ The firmware has been compiled and verified with the following components and co
 | **LittleFS** | Built-in | Espressif ESP32 Core | Wear-leveled persistent flash file system |
 | **WiFi / WebServer / DNSServer** | Built-in | Espressif ESP32 Core | Captive portal & AP networking stack |
 | **BLE (Bluetooth Low Energy)** | Built-in | Espressif ESP32 Core | Non-blocking BLE beacon advertisement scanner |
-| **Chart.js** | **v4.x (CDN)** | [Chartjs.org](https://www.chartjs.org/) | Browser-rendered interactive time-series charts |
+| **Vector SVG Engine** | **Built-in Native** | Onboard ESP32 C++ | 100% Offline vector time-series charts (Zero CDN / Zero Internet dependency) |
 
 ---
 
@@ -337,7 +337,7 @@ Connect your ESP32-C3 board to your PC via a USB-C data cable (e.g., `COM4`).
 ```bash
 # 1. Install board core and libraries
 arduino-cli core install esp32:esp32
-arduino-cli lib install "U8g2"
+arduino-cli lib install "U8g2" "qrcode"
 
 # 2. Compile using Huge App partition scheme
 arduino-cli compile --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionScheme=huge_app .
@@ -370,7 +370,7 @@ arduino-cli upload -p COM4 --fqbn esp32:esp32:esp32c3:CDCOnBoot=cdc,PartitionSch
 
 ### Step 4: Exporting 30-Day Audit Reports & CSV Data
 At any point, access the Web Portal (`192.168.4.1`) or navigate via local network IP to access:
-- **📄 View / Print PDF Report (`/report`):** Generates a print-ready A4 compliance audit report complete with a 30-day time-series curve (Chart.js), **Laboratory 4-Point Calibration Certificate with Standard Deviation ($\sigma$)**, Minimum/Maximum temperature timestamps, and excursion breach duration tables.
+- **📄 View / Print PDF Report (`/report`):** Generates a print-ready A4 compliance audit report complete with a 100% offline vector time-series curve (Native SVG), **Laboratory 4-Point Calibration Certificate with Standard Deviation ($\sigma$)**, Minimum/Maximum temperature timestamps, and excursion breach duration tables.
   - **🛡️ Cryptographic Tamper-Proofing Seal:** Employs the ESP32-C3 hardware SHA-256 accelerator to stamp every report with an immutable 64-character digest and unique Certificate ID (`CERT-XXXX-XXXXXXXX`).
   - **📱 Dynamic QR Code:** Embedded directly on the report, linking directly to the device's `/verify` authentication endpoint.
 - **🛡️ Digital Audit Verification (`/verify`):** A dedicated verification portal confirming document authenticity, hardware MAC origin, and unaltered data status with a green verification badge.
