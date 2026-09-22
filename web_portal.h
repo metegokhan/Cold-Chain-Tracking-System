@@ -36,6 +36,8 @@ private:
   bool clientHasConnected = false;
   bool shouldRestartOnDisconnect = false;
   unsigned long disconnectTriggerTime = 0;
+  bool pendingRestart = false;
+  unsigned long restartTimer = 0;
 
 public:
   unsigned long getApStartTime() const { return apStartTime; }
@@ -68,12 +70,26 @@ public:
     html += "  var formData = new FormData(form);";
     html += "  var btn = document.getElementById('save-btn');";
     html += "  btn.disabled = true; btn.innerText = 'Saving...';";
-    html += "  fetch('/save', {method: 'POST', body: formData})";
-    html += "  .then(response => {";
-    html += "    document.getElementById('status-box').style.display = 'block';";
-    html += "    setTimeout(()=>{ window.location.reload(); }, 3000);";
+    html += "  var params = new URLSearchParams();";
+    html += "  for (var pair of formData.entries()) {";
+    html += "    params.append(pair[0], pair[1]);";
+    html += "  }";
+    html += "  fetch('/save', {";
+    html += "    method: 'POST',";
+    html += "    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },";
+    html += "    body: params.toString()";
     html += "  })";
-    html += "  .catch(error => { alert('Error occurred!'); btn.disabled = false; btn.innerText = 'SAVE'; });";
+    html += "  .then(function(response){";
+    html += "    if (!response.ok) { throw new Error('HTTP ' + response.status); }";
+    html += "    var sb = document.getElementById('status-box');";
+    html += "    if (sb) { sb.style.display = 'block'; }";
+    html += "    btn.innerText = '✅ Saved! Restarting...';";
+    html += "    setTimeout(function(){ window.location.reload(); }, 4000);";
+    html += "  })";
+    html += "  .catch(function(error){";
+    html += "    alert('Save failed: ' + (error.message || error));";
+    html += "    btn.disabled = false; btn.innerText = '💾 SAVE ALL & RESTART';";
+    html += "  });";
     html += "}";
     html += "function triggerScan(){";
     html += "  var m = document.getElementById('scan-modal');";
@@ -120,7 +136,7 @@ public:
     html += "</div>";
     html += "</div>";
 
-    html += "<form id=\"cfg-form\" onsubmit=\"submitForm(event)\">";
+    html += "<form id=\"cfg-form\" method=\"POST\" action=\"/save\" onsubmit=\"submitForm(event)\">";
     html += "<div class=\"card\">";
     html += "<h2>📶 1. Wi-Fi Configuration (Primary & Backup)</h2>";
     html += "<label>Primary Wi-Fi SSID:</label>";
@@ -597,11 +613,12 @@ public:
       }
 
       cfgMgr.save();
+      Serial.println("[PORTAL] ✅ Configuration saved to NVS!");
 
       server.sendHeader("Connection", "close");
       server.send(200, "text/plain; charset=utf-8", "OK");
-      delay(1500);
-      ESP.restart();
+      pendingRestart = true;
+      restartTimer = millis() + 1500;
     });
 
     server.onNotFound([this]() {
@@ -644,6 +661,14 @@ public:
         } else {
           shouldRestartOnDisconnect = false;
         }
+      }
+
+      // 1b. Ayarlar kaydedildiğinde istemciye yanıtın tam iletilmesini bekleyip yeniden başlat
+      if (pendingRestart && (long)(now - restartTimer) >= 0) {
+        Serial.println("[PORTAL] 🔄 Restarting device to apply new settings...");
+        if (historyCount > 0) saveHistoryToFS();
+        delay(200);
+        ESP.restart();
       }
 
       // 2. WiFi AP modu en fazla 10 dakika (600 saniye) açık kalsın
